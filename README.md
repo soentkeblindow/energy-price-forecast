@@ -22,9 +22,9 @@ cp .env.example .env   # then fill in your ENTSO-E API key
 
 ## Project Structure
 ├── data/
-│   ├── raw/          
-│   ├── interim/      
-│   └── processed/   
+│   ├── raw/
+│   ├── interim/
+│   └── processed/
 ├── notebooks/
 ├── src/
 │   └── energy_forecast/

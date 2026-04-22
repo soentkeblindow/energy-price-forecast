@@ -1,0 +1,38 @@
+# Configuration for pre-commit (https://pre-commit.com)
+# Run manually: pre-commit run --all-files
+
+repos:
+  # General hygiene checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: detect-private-key
+
+  # Ruff: lint + format
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.11
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # Mypy: type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.2
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pandas-stubs
+          - types-python-dateutil
+        args: [--config-file=pyproject.toml]
+        # Only run on your source code, not tests or notebooks
+        files: ^src/

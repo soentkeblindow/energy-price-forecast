@@ -41,3 +41,68 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.11",
 ]
+
+
+# ==========================================
+# Tool configurations
+# ==========================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["notebooks", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modernize syntax)
+    "B",    # flake8-bugbear (common bugs)
+    "SIM",  # flake8-simplify (code simplification)
+    "N",    # pep8-naming (naming conventions)
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+strict_optional = true
+no_implicit_optional = true
+# Wir starten mit moderater Strenge;
+# "strict = true" können wir später anknipsen
+exclude = ["notebooks/", ".venv/"]
+
+[[tool.mypy.overrides]]
+# Externe Libraries ohne Typ-Stubs — keine Fehler für deren Imports
+module = [
+    "entsoe.*",
+    "lightgbm.*",
+    "yfinance.*",
+    "shap.*",
+    "statsmodels.*",
+    "mlflow.*",
+    "streamlit.*",
+    "holidays.*",
+    "optuna.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+]
