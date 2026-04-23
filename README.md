@@ -1,5 +1,8 @@
 # Energy Price Forecast — Day-Ahead Germany (DE-LU)
 
+[![CI](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml)
+
+
 Day-ahead electricity price forecasting for the German–Luxembourg bidding zone using LightGBM, quantile regression for prediction intervals, and walk-forward backtesting.
 
 **Status:** Under active development (Sprint 1 — data pipeline setup).
