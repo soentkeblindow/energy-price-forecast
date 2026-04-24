@@ -34,6 +34,7 @@ repos:
           - pandas-stubs
           - python-dotenv
           - types-python-dateutil
+          - types-requests
         args: [--config-file=pyproject.toml]
         # Only run on your source code, not tests or notebooks
         files: ^src/
