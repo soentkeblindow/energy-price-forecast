@@ -32,6 +32,7 @@ repos:
       - id: mypy
         additional_dependencies:
           - pandas-stubs
+          - python-dotenv
           - types-python-dateutil
         args: [--config-file=pyproject.toml]
         # Only run on your source code, not tests or notebooks
