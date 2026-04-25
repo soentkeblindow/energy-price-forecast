@@ -101,5 +101,9 @@ def cached_fetch(
 
     non_empty = [c for c in chunks if not c.empty]
     if not non_empty:
-        return pd.DataFrame()
+        # Preserve column schema from the first chunk that has columns defined so
+        # callers receive a well-formed empty DataFrame even when every API call
+        # returned no data.
+        template = next((c for c in chunks if len(c.columns) > 0), None)
+        return pd.DataFrame(columns=template.columns) if template is not None else pd.DataFrame()
     return pd.concat(non_empty).sort_index().loc[start:end]
