@@ -11,6 +11,7 @@ dependencies = [
     "entsoe-py>=0.8.0",
     "holidays>=0.95",
     "lightgbm>=4.6.0",
+    "lxml>=6.1.0",
     "matplotlib>=3.10.8",
     "mlflow>=3.11.1",
     "optuna>=4.8.0",
@@ -114,4 +115,10 @@ addopts = [
     "-v",
     "--strict-markers",
     "-m", "not integration",
+]
+# entsoe-py 0.8.0 hardcodes html.parser in series_parsers.py; XML is parsed
+# correctly for our data shapes (dtype float64, values plausible). Suppress
+# the cosmetic BeautifulSoup warning until entsoe-py upgrades to features="xml".
+filterwarnings = [
+    "ignore::bs4.XMLParsedAsHTMLWarning",
 ]
