@@ -1,4 +1,4 @@
-"""Unit tests for fetch_day_ahead_prices.
+"""Unit tests for the ENTSO-E client fetchers.
 
 All tests mock _get_client() — the boundary between our code and the ENTSO-E
 library — so only the API class itself is replaced. Cache and retry logic run
@@ -16,7 +16,7 @@ from entsoe.exceptions import NoMatchingDataError
 from freezegun import freeze_time
 
 from energy_price_forecast.data._entsoe_retry import EntsoeFetchError
-from energy_price_forecast.data.entsoe_client import fetch_day_ahead_prices
+from energy_price_forecast.data.entsoe_client import fetch_day_ahead_prices, fetch_load
 
 MODULE = "energy_price_forecast.data.entsoe_client"
 
@@ -61,7 +61,7 @@ def cache_root(tmp_path: Path) -> Generator[Path, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — Cache-Hit: complete month cached → no API call
+# fetch_day_ahead_prices — Test 1: complete month cached → no API call
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_cache_hit(client_mock: MagicMock, cache_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — Cache-Miss: no cached file → API called, file written
+# fetch_day_ahead_prices — Test 2: no cached file → API called, file written
 # ---------------------------------------------------------------------------
 
 
@@ -97,8 +97,7 @@ def test_cache_miss_calls_api_and_writes_file(client_mock: MagicMock, cache_root
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — Current month: cached file exists but month is not yet complete
-#           → cache is bypassed, API is called again
+# fetch_day_ahead_prices — Test 3: current month bypasses cache, re-fetches
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +115,7 @@ def test_current_month_is_always_refetched(client_mock: MagicMock, cache_root: P
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — Empty response: NoMatchingDataError → empty DataFrame with columns
+# fetch_day_ahead_prices — Test 4: NoMatchingDataError → empty DataFrame with columns
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +132,7 @@ def test_empty_response_returns_empty_dataframe(client_mock: MagicMock, cache_ro
 
 
 # ---------------------------------------------------------------------------
-# Test 5 — Retry on transient error: 3 failures then success → correct result
+# fetch_day_ahead_prices — Test 5: 3 transient failures then success → correct result
 # ---------------------------------------------------------------------------
 
 
@@ -156,7 +155,7 @@ def test_retry_on_transient_error(client_mock: MagicMock, cache_root: Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — Retry exhaustion: permanent failure → EntsoeFetchError raised
+# fetch_day_ahead_prices — Test 6: permanent failure → EntsoeFetchError raised
 # ---------------------------------------------------------------------------
 
 
@@ -172,7 +171,7 @@ def test_retry_exhaustion_raises_fetch_error(client_mock: MagicMock, cache_root:
 
 
 # ---------------------------------------------------------------------------
-# Test 7 — Chunk aggregation: 3-month range → 3 API calls, concatenated result
+# fetch_day_ahead_prices — Test 7: 3-month range → 3 API calls, concatenated result
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +192,7 @@ def test_chunk_aggregation(client_mock: MagicMock, cache_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 8 — Incomplete cache: <90% rows for a complete month → re-fetch
+# fetch_day_ahead_prices — Test 8: <90% rows for complete month → re-fetch
 # ---------------------------------------------------------------------------
 
 
@@ -209,6 +208,52 @@ def test_incomplete_cache_triggers_refetch(client_mock: MagicMock, cache_root: P
 
     client_mock.query_day_ahead_prices.assert_called_once()
     assert len(result) == 744
+
+
+# ---------------------------------------------------------------------------
+# fetch_load — Test 1: both APIs return data → two-column DataFrame
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_load_returns_both_columns(client_mock: MagicMock, cache_root: Path) -> None:
+    idx = pd.date_range("2022-01-01", periods=744, freq="h", tz="UTC")
+    client_mock.query_load.return_value = pd.DataFrame({"Actual Load": 30_000.0}, index=idx)
+    client_mock.query_load_forecast.return_value = pd.DataFrame(
+        {"Forecasted Load": 31_000.0}, index=idx
+    )
+
+    result = fetch_load(
+        pd.Timestamp("2022-01-01", tz="UTC"),
+        pd.Timestamp("2022-01-31 23:00", tz="UTC"),
+    )
+
+    assert list(result.columns) == ["load_actual", "load_forecast_day_ahead"]
+    assert len(result) == 744
+    assert result["load_actual"].notna().all()
+    assert result["load_forecast_day_ahead"].notna().all()
+
+
+# ---------------------------------------------------------------------------
+# fetch_load — Test 2: one API fails → other column NaN, schema preserved
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_load_preserves_schema_on_partial_failure(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    idx = pd.date_range("2022-01-01", periods=744, freq="h", tz="UTC")
+    client_mock.query_load.return_value = pd.DataFrame({"Actual Load": 30_000.0}, index=idx)
+    client_mock.query_load_forecast.side_effect = NoMatchingDataError
+
+    result = fetch_load(
+        pd.Timestamp("2022-01-01", tz="UTC"),
+        pd.Timestamp("2022-01-31 23:00", tz="UTC"),
+    )
+
+    assert list(result.columns) == ["load_actual", "load_forecast_day_ahead"]
+    assert len(result) == 744
+    assert result["load_actual"].notna().all()
+    assert result["load_forecast_day_ahead"].isna().all()
 
 
 # ---------------------------------------------------------------------------

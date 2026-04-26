@@ -37,3 +37,52 @@ def fetch_day_ahead_prices(
         return series.tz_convert("UTC").rename("day_ahead_price").to_frame()
 
     return cached_fetch(start, end, cache_dir, area, fetch_fn)
+
+
+def fetch_load(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    cache_dir = DATA_RAW / "entsoe" / "load"
+    _columns = ["load_actual", "load_forecast_day_ahead"]
+
+    def fetch_fn(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        client = _get_client()
+
+        try:
+            actual = (
+                call_with_retry(lambda: client.query_load(area, s, e))["Actual Load"]
+                .tz_convert("UTC")
+                .rename("load_actual")
+            )
+        except NoMatchingDataError:
+            logger.warning("No load actual from ENTSO-E for %s–%s", s, e)
+            actual = pd.Series(dtype=float, name="load_actual")
+
+        try:
+            forecast = (
+                call_with_retry(lambda: client.query_load_forecast(area, s, e))["Forecasted Load"]
+                .tz_convert("UTC")
+                .rename("load_forecast_day_ahead")
+            )
+        except NoMatchingDataError:
+            logger.warning("No load forecast from ENTSO-E for %s–%s", s, e)
+            forecast = pd.Series(dtype=float, name="load_forecast_day_ahead")
+
+        if actual.empty and forecast.empty:
+            return pd.DataFrame(columns=_columns)
+
+        # Partial failure: reindex the empty Series to the other's index so that
+        # pd.concat always produces a two-column DataFrame. The all-NaN column is
+        # cached as-is — the 90%-row coverage check sees the row count as sufficient.
+        # To force a re-fetch of later-backfilled ENTSO-E data, delete the cache
+        # file manually.
+        if actual.empty:
+            actual = actual.reindex(forecast.index)
+        elif forecast.empty:
+            forecast = forecast.reindex(actual.index)
+
+        return pd.concat([actual, forecast], axis=1)
+
+    return cached_fetch(start, end, cache_dir, area, fetch_fn)
