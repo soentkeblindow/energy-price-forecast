@@ -232,21 +232,13 @@ def fetch_generation_by_type(
             if series is not None:
                 result[dst] = series
 
-        hydro_parts = [
-            _get_gen_series(gen_df, t)
-            for t in _HYDRO_TYPES
-            if _get_gen_series(gen_df, t) is not None
-        ]
+        hydro_parts = [gs for t in _HYDRO_TYPES if (gs := _get_gen_series(gen_df, t)) is not None]
         if hydro_parts:
             result["gen_hydro"] = pd.concat(hydro_parts, axis=1).sum(axis=1, min_count=1)
 
         known = set(_ENTSOE_TO_GEN_COL.keys()) | _HYDRO_TYPES
         other_types = all_types - known
-        other_parts = [
-            _get_gen_series(gen_df, t)
-            for t in other_types
-            if _get_gen_series(gen_df, t) is not None
-        ]
+        other_parts = [gs for t in other_types if (gs := _get_gen_series(gen_df, t)) is not None]
         if other_parts:
             result["gen_other"] = pd.concat(other_parts, axis=1).sum(axis=1, min_count=1)
 
