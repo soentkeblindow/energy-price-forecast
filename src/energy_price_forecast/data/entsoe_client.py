@@ -1,5 +1,6 @@
 import functools
 import logging
+from collections.abc import Callable
 
 import pandas as pd
 from entsoe import EntsoePandasClient
@@ -14,10 +15,74 @@ logger = logging.getLogger(__name__)
 AREA_DE_LU = "DE_LU"
 NEIGHBORS = ["FR", "NL", "AT", "PL", "CH", "DK_1"]
 
+# Maps entsoe-py column names to our gen_* column names.
+_ENTSOE_TO_GEN_COL: dict[str, str] = {
+    "Nuclear": "gen_nuclear",
+    "Fossil Brown coal/Lignite": "gen_lignite",
+    "Fossil Hard coal": "gen_hard_coal",
+    "Fossil Gas": "gen_gas",
+    "Fossil Oil": "gen_oil",
+    "Biomass": "gen_biomass",
+    "Wind Onshore": "gen_wind_onshore",
+    "Wind Offshore": "gen_wind_offshore",
+    "Solar": "gen_solar",
+}
+
+# Hydro sub-types that are summed into gen_hydro.
+_HYDRO_TYPES = frozenset(
+    {
+        "Hydro Pumped Storage",
+        "Hydro Run-of-river and poundage",
+        "Hydro Water Reservoir",
+    }
+)
+
+_GEN_COLUMNS = [
+    "gen_nuclear",
+    "gen_lignite",
+    "gen_hard_coal",
+    "gen_gas",
+    "gen_oil",
+    "gen_biomass",
+    "gen_hydro",
+    "gen_wind_onshore",
+    "gen_wind_offshore",
+    "gen_solar",
+    "gen_other",
+]
+
+_WIND_SOLAR_COLUMNS = [
+    "wind_onshore_forecast",
+    "wind_offshore_forecast",
+    "solar_forecast",
+    "wind_onshore_actual",
+    "wind_offshore_actual",
+    "solar_actual",
+]
+
 
 @functools.cache
 def _get_client() -> EntsoePandasClient:
     return EntsoePandasClient(api_key=get_entsoe_token())
+
+
+def _get_gen_series(gen_df: pd.DataFrame, source_name: str) -> pd.Series | None:
+    """Extract the Actual Aggregated series for a generation type.
+
+    query_generation() can return either a flat or a MultiIndex DataFrame
+    (second level: "Actual Aggregated" / "Actual Consumption"). We prefer
+    "Actual Aggregated" when both sub-columns exist.
+    """
+    if isinstance(gen_df.columns, pd.MultiIndex):
+        cols = [c for c in gen_df.columns if c[0] == source_name]
+        if not cols:
+            return None
+        agg = [c for c in cols if "Aggregated" in c[1]]
+        key = agg[0] if agg else cols[0]
+        return gen_df[key]
+    elif source_name in gen_df.columns:
+        return gen_df[source_name]
+    return None
 
 
 def fetch_day_ahead_prices(
@@ -86,3 +151,172 @@ def fetch_load(
         return pd.concat([actual, forecast], axis=1)
 
     return cached_fetch(start, end, cache_dir, area, fetch_fn)
+
+
+def fetch_wind_solar_forecast_actual(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    cache_dir = DATA_RAW / "entsoe" / "wind_solar"
+
+    def fetch_fn(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        client = _get_client()
+
+        try:
+            forecast_df = call_with_retry(
+                lambda: client.query_wind_and_solar_forecast(area, s, e)
+            ).tz_convert("UTC")
+        except NoMatchingDataError:
+            logger.warning("No wind/solar forecast from ENTSO-E for %s–%s", s, e)
+            forecast_df = pd.DataFrame()
+
+        try:
+            gen_df = call_with_retry(lambda: client.query_generation(area, s, e)).tz_convert("UTC")
+        except NoMatchingDataError:
+            logger.warning("No generation data from ENTSO-E for %s–%s", s, e)
+            gen_df = pd.DataFrame()
+
+        parts: list[pd.Series] = []
+
+        for src, dst in [
+            ("Wind Onshore", "wind_onshore_forecast"),
+            ("Wind Offshore", "wind_offshore_forecast"),
+            ("Solar", "solar_forecast"),
+        ]:
+            if not forecast_df.empty and src in forecast_df.columns:
+                parts.append(forecast_df[src].rename(dst))
+
+        for src, dst in [
+            ("Wind Onshore", "wind_onshore_actual"),
+            ("Wind Offshore", "wind_offshore_actual"),
+            ("Solar", "solar_actual"),
+        ]:
+            if not gen_df.empty:
+                series = _get_gen_series(gen_df, src)
+                if series is not None:
+                    parts.append(series.rename(dst))
+
+        if not parts:
+            return pd.DataFrame(columns=_WIND_SOLAR_COLUMNS)
+        return pd.concat(parts, axis=1)
+
+    return cached_fetch(start, end, cache_dir, area, fetch_fn)
+
+
+def fetch_generation_by_type(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    cache_dir = DATA_RAW / "entsoe" / "generation"
+
+    def fetch_fn(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        client = _get_client()
+
+        try:
+            gen_df = call_with_retry(lambda: client.query_generation(area, s, e)).tz_convert("UTC")
+        except NoMatchingDataError:
+            logger.warning("No generation data from ENTSO-E for %s–%s", s, e)
+            return pd.DataFrame(columns=_GEN_COLUMNS)
+
+        if isinstance(gen_df.columns, pd.MultiIndex):
+            all_types: set[str] = {c[0] for c in gen_df.columns}
+        else:
+            all_types = set(gen_df.columns)
+
+        result: dict[str, pd.Series] = {}
+
+        for src, dst in _ENTSOE_TO_GEN_COL.items():
+            series = _get_gen_series(gen_df, src)
+            if series is not None:
+                result[dst] = series
+
+        hydro_parts = [
+            _get_gen_series(gen_df, t)
+            for t in _HYDRO_TYPES
+            if _get_gen_series(gen_df, t) is not None
+        ]
+        if hydro_parts:
+            result["gen_hydro"] = pd.concat(hydro_parts, axis=1).sum(axis=1, min_count=1)
+
+        known = set(_ENTSOE_TO_GEN_COL.keys()) | _HYDRO_TYPES
+        other_types = all_types - known
+        other_parts = [
+            _get_gen_series(gen_df, t)
+            for t in other_types
+            if _get_gen_series(gen_df, t) is not None
+        ]
+        if other_parts:
+            result["gen_other"] = pd.concat(other_parts, axis=1).sum(axis=1, min_count=1)
+
+        if not result:
+            return pd.DataFrame(columns=_GEN_COLUMNS)
+        return pd.DataFrame(result)
+
+    return cached_fetch(start, end, cache_dir, area, fetch_fn)
+
+
+def _fetch_border_flows(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str,
+    cache_subdir: str,
+    col_prefix: str,
+    query_fn: Callable[[str, str, pd.Timestamp, pd.Timestamp], pd.Series],
+) -> pd.DataFrame:
+    """Shared loop logic for scheduled_exchanges and cross_border_flows.
+
+    For each neighbor, calls query_fn in both directions and caches the resulting
+    net-flow Series (positive = export from area to neighbor) as a single-column
+    Parquet. The six per-neighbor DataFrames are concatenated column-wise.
+    """
+    cache_dir = DATA_RAW / "entsoe" / cache_subdir
+    neighbor_frames: list[pd.DataFrame] = []
+
+    for neighbor in NEIGHBORS:
+        col_name = f"{col_prefix}_de_to_{neighbor.lower()}"
+        file_prefix = f"{area}_{neighbor}"
+
+        # Default args capture loop-variable values at definition time.
+        def fetch_fn(
+            s: pd.Timestamp,
+            e: pd.Timestamp,
+            nb: str = neighbor,
+            col: str = col_name,
+        ) -> pd.DataFrame:
+            try:
+                export = call_with_retry(lambda: query_fn(area, nb, s, e)).tz_convert("UTC")
+                import_ = call_with_retry(lambda: query_fn(nb, area, s, e)).tz_convert("UTC")
+            except NoMatchingDataError:
+                logger.warning("No %s data for %s↔%s for %s–%s", cache_subdir, area, nb, s, e)
+                return pd.DataFrame(columns=[col])
+            return (export - import_).rename(col).to_frame()
+
+        neighbor_frames.append(cached_fetch(start, end, cache_dir, file_prefix, fetch_fn))
+
+    if not neighbor_frames:
+        return pd.DataFrame()
+    return pd.concat(neighbor_frames, axis=1)
+
+
+def fetch_scheduled_exchanges(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    def query_pair(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
+        return _get_client().query_scheduled_exchanges(from_a, to_a, s, e, dayahead=True)
+
+    return _fetch_border_flows(start, end, area, "scheduled_exchanges", "scheduled_net", query_pair)
+
+
+def fetch_cross_border_flows(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    def query_pair(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
+        return _get_client().query_crossborder_flows(from_a, to_a, s, e)
+
+    return _fetch_border_flows(start, end, area, "cross_border_flows", "physical_net", query_pair)
