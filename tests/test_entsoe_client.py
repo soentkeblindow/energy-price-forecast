@@ -18,7 +18,9 @@ from freezegun import freeze_time
 
 from energy_price_forecast.data._entsoe_retry import EntsoeFetchError
 from energy_price_forecast.data.entsoe_client import (
+    _GEN_COLUMNS,
     fetch_day_ahead_prices,
+    fetch_generation_by_type,
     fetch_load,
     fetch_wind_solar_forecast_actual,
 )
@@ -400,6 +402,147 @@ def test_wind_solar_handles_partial_sources(client_mock: MagicMock, cache_root: 
     assert "wind_onshore_actual" not in result.columns
     assert "wind_offshore_actual" not in result.columns
     assert "solar_actual" not in result.columns
+
+
+# ---------------------------------------------------------------------------
+# fetch_generation_by_type — Test 1: happy path
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_generation_by_type_returns_expected_columns(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        return pd.DataFrame(
+            {
+                "Nuclear": 8000.0,
+                "Fossil Gas": 4000.0,
+                "Wind Onshore": 5000.0,
+                "Solar": 100.0,
+                "Hydro Run-of-river and poundage": 2000.0,
+            },
+            index=idx,
+        )
+
+    client_mock.query_generation.side_effect = _gen_se
+
+    result = fetch_generation_by_type(
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+    )
+
+    assert not result.empty
+    for col in ("gen_nuclear", "gen_gas", "gen_wind_onshore", "gen_solar", "gen_hydro"):
+        assert col in result.columns
+    index = result.index
+    assert isinstance(index, pd.DatetimeIndex)
+    assert index.tz is not None
+    assert len(result) == 72
+
+
+# ---------------------------------------------------------------------------
+# fetch_generation_by_type — Test 2: empty response
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_generation_by_type_handles_empty_response(
+    client_mock: MagicMock, cache_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    client_mock.query_generation.side_effect = NoMatchingDataError
+
+    with caplog.at_level(logging.WARNING):
+        result = fetch_generation_by_type(
+            pd.Timestamp("2024-01-01", tz="UTC"),
+            pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+        )
+
+    assert result.empty
+    assert set(result.columns) == set(_GEN_COLUMNS)
+    assert len(caplog.records) > 0
+
+
+# ---------------------------------------------------------------------------
+# fetch_generation_by_type — Test 3: cache hit on second call
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_generation_by_type_uses_cache_on_second_call(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        return pd.DataFrame({"Nuclear": 8000.0, "Wind Onshore": 5000.0}, index=idx)
+
+    client_mock.query_generation.side_effect = _gen_se
+
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    end = pd.Timestamp("2024-01-31 23:00", tz="UTC")
+
+    result1 = fetch_generation_by_type(start, end)
+    calls_after_first = client_mock.query_generation.call_count
+
+    result2 = fetch_generation_by_type(start, end)
+
+    assert client_mock.query_generation.call_count == calls_after_first
+    pd.testing.assert_frame_equal(result1, result2, check_freq=False)
+
+
+# ---------------------------------------------------------------------------
+# fetch_generation_by_type — Test 4 (extra): hydro sub-types summed into gen_hydro
+# ---------------------------------------------------------------------------
+
+
+def test_generation_aggregates_hydro_subtypes(client_mock: MagicMock, cache_root: Path) -> None:
+    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        return pd.DataFrame(
+            {
+                "Hydro Pumped Storage": 500.0,
+                "Hydro Run-of-river and poundage": 1000.0,
+                "Hydro Water Reservoir": 800.0,
+            },
+            index=idx,
+        )
+
+    client_mock.query_generation.side_effect = _gen_se
+
+    result = fetch_generation_by_type(
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+    )
+
+    assert "gen_hydro" in result.columns
+    assert (result["gen_hydro"] == 2300.0).all()
+
+
+# ---------------------------------------------------------------------------
+# fetch_generation_by_type — Test 5 (extra): unknown types collected into gen_other
+# ---------------------------------------------------------------------------
+
+
+def test_generation_collects_unknown_types_into_other(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        return pd.DataFrame(
+            {
+                "Nuclear": 8000.0,
+                "Geothermal": 50.0,  # not in _ENTSOE_TO_GEN_COL or _HYDRO_TYPES
+            },
+            index=idx,
+        )
+
+    client_mock.query_generation.side_effect = _gen_se
+
+    result = fetch_generation_by_type(
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+    )
+
+    assert "gen_other" in result.columns
+    assert (result["gen_other"] == 50.0).all()
 
 
 # ---------------------------------------------------------------------------
