@@ -249,6 +249,32 @@ def fetch_generation_by_type(
     return cached_fetch(start, end, cache_dir, area, fetch_fn)
 
 
+def _build_neighbor_fetch_fn(
+    area: str,
+    neighbor: str,
+    col_name: str,
+    cache_subdir: str,
+    query_fn: Callable[[str, str, pd.Timestamp, pd.Timestamp], pd.Series],
+) -> Callable[[pd.Timestamp, pd.Timestamp], pd.DataFrame]:
+    """Return the per-neighbor fetch function used by cached_fetch.
+
+    Extracted from the loop in _fetch_border_flows to avoid the late-binding
+    closure problem: all values are bound as function parameters here, not
+    resolved lazily from the enclosing loop scope.
+    """
+
+    def fetch_fn(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
+        try:
+            export = call_with_retry(lambda: query_fn(area, neighbor, s, e)).tz_convert("UTC")
+            import_ = call_with_retry(lambda: query_fn(neighbor, area, s, e)).tz_convert("UTC")
+        except NoMatchingDataError:
+            logger.warning("No %s data for %s↔%s for %s–%s", cache_subdir, area, neighbor, s, e)
+            return pd.DataFrame(columns=[col_name])
+        return (export - import_).rename(col_name).to_frame()
+
+    return fetch_fn
+
+
 def _fetch_border_flows(
     start: pd.Timestamp,
     end: pd.Timestamp,
@@ -269,22 +295,7 @@ def _fetch_border_flows(
     for neighbor in NEIGHBORS:
         col_name = f"{col_prefix}_de_to_{neighbor.lower()}"
         file_prefix = f"{area}_{neighbor}"
-
-        # Default args capture loop-variable values at definition time.
-        def fetch_fn(
-            s: pd.Timestamp,
-            e: pd.Timestamp,
-            nb: str = neighbor,
-            col: str = col_name,
-        ) -> pd.DataFrame:
-            try:
-                export = call_with_retry(lambda: query_fn(area, nb, s, e)).tz_convert("UTC")
-                import_ = call_with_retry(lambda: query_fn(nb, area, s, e)).tz_convert("UTC")
-            except NoMatchingDataError:
-                logger.warning("No %s data for %s↔%s for %s–%s", cache_subdir, area, nb, s, e)
-                return pd.DataFrame(columns=[col])
-            return (export - import_).rename(col).to_frame()
-
+        fetch_fn = _build_neighbor_fetch_fn(area, neighbor, col_name, cache_subdir, query_fn)
         neighbor_frames.append(cached_fetch(start, end, cache_dir, file_prefix, fetch_fn))
 
     if not neighbor_frames:
