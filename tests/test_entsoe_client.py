@@ -22,6 +22,7 @@ from energy_price_forecast.data.entsoe_client import (
     fetch_day_ahead_prices,
     fetch_generation_by_type,
     fetch_load,
+    fetch_scheduled_exchanges,
     fetch_wind_solar_forecast_actual,
 )
 
@@ -543,6 +544,125 @@ def test_generation_collects_unknown_types_into_other(
 
     assert "gen_other" in result.columns
     assert (result["gen_other"] == 50.0).all()
+
+
+# ---------------------------------------------------------------------------
+# fetch_scheduled_exchanges — Test 1: happy path
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_scheduled_exchanges_returns_expected_columns(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    def _se(
+        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+    ) -> pd.Series:
+        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+
+    client_mock.query_scheduled_exchanges.side_effect = _se
+
+    result = fetch_scheduled_exchanges(
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+    )
+
+    expected = {
+        "scheduled_net_de_to_fr",
+        "scheduled_net_de_to_nl",
+        "scheduled_net_de_to_at",
+        "scheduled_net_de_to_pl",
+        "scheduled_net_de_to_ch",
+        "scheduled_net_de_to_dk_1",
+    }
+    assert not result.empty
+    assert set(result.columns) == expected
+    index = result.index
+    assert isinstance(index, pd.DatetimeIndex)
+    assert index.tz is not None
+    assert len(result) == 72
+
+
+# ---------------------------------------------------------------------------
+# fetch_scheduled_exchanges — Test 2: empty response
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_scheduled_exchanges_handles_empty_response(
+    client_mock: MagicMock, cache_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    client_mock.query_scheduled_exchanges.side_effect = NoMatchingDataError
+
+    with caplog.at_level(logging.WARNING):
+        result = fetch_scheduled_exchanges(
+            pd.Timestamp("2024-01-01", tz="UTC"),
+            pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+        )
+
+    expected = {
+        "scheduled_net_de_to_fr",
+        "scheduled_net_de_to_nl",
+        "scheduled_net_de_to_at",
+        "scheduled_net_de_to_pl",
+        "scheduled_net_de_to_ch",
+        "scheduled_net_de_to_dk_1",
+    }
+    assert result.empty
+    assert set(result.columns) == expected
+    assert len(caplog.records) > 0
+
+
+# ---------------------------------------------------------------------------
+# fetch_scheduled_exchanges — Test 3: cache hit on second call
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_scheduled_exchanges_uses_cache_on_second_call(
+    client_mock: MagicMock, cache_root: Path
+) -> None:
+    def _se(
+        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+    ) -> pd.Series:
+        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+
+    client_mock.query_scheduled_exchanges.side_effect = _se
+
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    end = pd.Timestamp("2024-01-31 23:00", tz="UTC")
+
+    result1 = fetch_scheduled_exchanges(start, end)
+    calls_after_first = (
+        client_mock.query_scheduled_exchanges.call_count
+    )  # 12: 6 neighbors × 2 directions
+
+    result2 = fetch_scheduled_exchanges(start, end)
+
+    assert client_mock.query_scheduled_exchanges.call_count == calls_after_first
+    pd.testing.assert_frame_equal(result1, result2, check_freq=False)
+
+
+# ---------------------------------------------------------------------------
+# fetch_scheduled_exchanges — Test 4 (extra): net flow = export − import
+# ---------------------------------------------------------------------------
+
+
+def test_scheduled_exchanges_computes_net_flow(client_mock: MagicMock, cache_root: Path) -> None:
+    def _se(
+        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+    ) -> pd.Series:
+        if "FR" not in (from_a, to_a):
+            raise NoMatchingDataError()
+        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        return pd.Series(100.0 if from_a == "DE_LU" else 30.0, index=idx)
+
+    client_mock.query_scheduled_exchanges.side_effect = _se
+
+    result = fetch_scheduled_exchanges(
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-03 23:00", tz="UTC"),
+    )
+
+    assert "scheduled_net_de_to_fr" in result.columns
+    assert (result["scheduled_net_de_to_fr"] == 70.0).all()
 
 
 # ---------------------------------------------------------------------------
