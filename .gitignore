@@ -225,6 +225,9 @@ data/processed/*
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 
+# specs
+docs/
+
 # MLflow Artefakte
 mlruns/
 mlartifacts/
