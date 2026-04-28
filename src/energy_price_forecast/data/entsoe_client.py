@@ -95,7 +95,7 @@ def fetch_day_ahead_prices(
     def fetch_fn(s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
         client = _get_client()
         try:
-            series = call_with_retry(lambda: client.query_day_ahead_prices(area, s, e))
+            series = call_with_retry(lambda: client.query_day_ahead_prices(area, start=s, end=e))
         except NoMatchingDataError:
             logger.warning("No day-ahead prices from ENTSO-E for %s–%s", s, e)
             return pd.DataFrame(columns=["day_ahead_price"])
@@ -117,7 +117,7 @@ def fetch_load(
 
         try:
             actual = (
-                call_with_retry(lambda: client.query_load(area, s, e))["Actual Load"]
+                call_with_retry(lambda: client.query_load(area, start=s, end=e))["Actual Load"]
                 .tz_convert("UTC")
                 .rename("load_actual")
             )
@@ -127,7 +127,9 @@ def fetch_load(
 
         try:
             forecast = (
-                call_with_retry(lambda: client.query_load_forecast(area, s, e))["Forecasted Load"]
+                call_with_retry(lambda: client.query_load_forecast(area, start=s, end=e))[
+                    "Forecasted Load"
+                ]
                 .tz_convert("UTC")
                 .rename("load_forecast_day_ahead")
             )
@@ -165,14 +167,16 @@ def fetch_wind_solar_forecast_actual(
 
         try:
             forecast_df = call_with_retry(
-                lambda: client.query_wind_and_solar_forecast(area, s, e)
+                lambda: client.query_wind_and_solar_forecast(area, start=s, end=e)
             ).tz_convert("UTC")
         except NoMatchingDataError:
             logger.warning("No wind/solar forecast from ENTSO-E for %s–%s", s, e)
             forecast_df = pd.DataFrame()
 
         try:
-            gen_df = call_with_retry(lambda: client.query_generation(area, s, e)).tz_convert("UTC")
+            gen_df = call_with_retry(
+                lambda: client.query_generation(area, start=s, end=e)
+            ).tz_convert("UTC")
         except NoMatchingDataError:
             logger.warning("No generation data from ENTSO-E for %s–%s", s, e)
             gen_df = pd.DataFrame()
@@ -215,7 +219,9 @@ def fetch_generation_by_type(
         client = _get_client()
 
         try:
-            gen_df = call_with_retry(lambda: client.query_generation(area, s, e)).tz_convert("UTC")
+            gen_df = call_with_retry(
+                lambda: client.query_generation(area, start=s, end=e)
+            ).tz_convert("UTC")
         except NoMatchingDataError:
             logger.warning("No generation data from ENTSO-E for %s–%s", s, e)
             return pd.DataFrame(columns=_GEN_COLUMNS)
@@ -309,7 +315,7 @@ def fetch_scheduled_exchanges(
     area: str = AREA_DE_LU,
 ) -> pd.DataFrame:
     def query_pair(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
-        return _get_client().query_scheduled_exchanges(from_a, to_a, s, e, dayahead=True)
+        return _get_client().query_scheduled_exchanges(from_a, to_a, start=s, end=e, dayahead=True)
 
     return _fetch_border_flows(start, end, area, "scheduled_exchanges", "scheduled_net", query_pair)
 
@@ -320,6 +326,6 @@ def fetch_cross_border_flows(
     area: str = AREA_DE_LU,
 ) -> pd.DataFrame:
     def query_pair(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
-        return _get_client().query_crossborder_flows(from_a, to_a, s, e)
+        return _get_client().query_crossborder_flows(from_a, to_a, start=s, end=e)
 
     return _fetch_border_flows(start, end, area, "cross_border_flows", "physical_net", query_pair)

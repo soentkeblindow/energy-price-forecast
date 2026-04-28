@@ -273,14 +273,14 @@ def test_fetch_load_preserves_schema_on_partial_failure(
 def test_fetch_wind_solar_forecast_actual_returns_expected_columns(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _forecast_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _forecast_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {"Wind Onshore": 5000.0, "Wind Offshore": 2000.0, "Solar": 100.0}, index=idx
         )
 
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {"Wind Onshore": 4800.0, "Wind Offshore": 1900.0, "Solar": 90.0}, index=idx
         )
@@ -346,14 +346,14 @@ def test_fetch_wind_solar_forecast_actual_handles_empty_response(
 def test_fetch_wind_solar_forecast_actual_uses_cache_on_second_call(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _forecast_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _forecast_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {"Wind Onshore": 5000.0, "Wind Offshore": 2000.0, "Solar": 100.0}, index=idx
         )
 
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {"Wind Onshore": 4800.0, "Wind Offshore": 1900.0, "Solar": 90.0}, index=idx
         )
@@ -382,8 +382,8 @@ def test_fetch_wind_solar_forecast_actual_uses_cache_on_second_call(
 
 
 def test_wind_solar_handles_partial_sources(client_mock: MagicMock, cache_root: Path) -> None:
-    def _forecast_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _forecast_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {"Wind Onshore": 5000.0, "Wind Offshore": 2000.0, "Solar": 100.0}, index=idx
         )
@@ -414,8 +414,8 @@ def test_wind_solar_handles_partial_sources(client_mock: MagicMock, cache_root: 
 def test_fetch_generation_by_type_returns_expected_columns(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {
                 "Nuclear": 8000.0,
@@ -472,8 +472,8 @@ def test_fetch_generation_by_type_handles_empty_response(
 def test_fetch_generation_by_type_uses_cache_on_second_call(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame({"Nuclear": 8000.0, "Wind Onshore": 5000.0}, index=idx)
 
     client_mock.query_generation.side_effect = _gen_se
@@ -496,8 +496,8 @@ def test_fetch_generation_by_type_uses_cache_on_second_call(
 
 
 def test_generation_aggregates_hydro_subtypes(client_mock: MagicMock, cache_root: Path) -> None:
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {
                 "Hydro Pumped Storage": 500.0,
@@ -526,8 +526,8 @@ def test_generation_aggregates_hydro_subtypes(client_mock: MagicMock, cache_root
 def test_generation_collects_unknown_types_into_other(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _gen_se(area: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.DataFrame(
             {
                 "Nuclear": 8000.0,
@@ -556,9 +556,9 @@ def test_fetch_scheduled_exchanges_returns_expected_columns(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
     def _se(
-        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+        from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp, dayahead: bool = False
     ) -> pd.Series:
-        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+        return pd.Series(1000.0, index=pd.date_range(start, end, freq="h", tz="UTC"))
 
     client_mock.query_scheduled_exchanges.side_effect = _se
 
@@ -621,9 +621,9 @@ def test_fetch_scheduled_exchanges_uses_cache_on_second_call(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
     def _se(
-        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+        from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp, dayahead: bool = False
     ) -> pd.Series:
-        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+        return pd.Series(1000.0, index=pd.date_range(start, end, freq="h", tz="UTC"))
 
     client_mock.query_scheduled_exchanges.side_effect = _se
 
@@ -648,11 +648,11 @@ def test_fetch_scheduled_exchanges_uses_cache_on_second_call(
 
 def test_scheduled_exchanges_computes_net_flow(client_mock: MagicMock, cache_root: Path) -> None:
     def _se(
-        from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp, dayahead: bool = False
+        from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp, dayahead: bool = False
     ) -> pd.Series:
         if "FR" not in (from_a, to_a):
             raise NoMatchingDataError()
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.Series(100.0 if from_a == "DE_LU" else 30.0, index=idx)
 
     client_mock.query_scheduled_exchanges.side_effect = _se
@@ -674,8 +674,8 @@ def test_scheduled_exchanges_computes_net_flow(client_mock: MagicMock, cache_roo
 def test_fetch_cross_border_flows_returns_expected_columns(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _cbf(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
-        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+    def _cbf(from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+        return pd.Series(1000.0, index=pd.date_range(start, end, freq="h", tz="UTC"))
 
     client_mock.query_crossborder_flows.side_effect = _cbf
 
@@ -737,8 +737,8 @@ def test_fetch_cross_border_flows_handles_empty_response(
 def test_fetch_cross_border_flows_uses_cache_on_second_call(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
-    def _cbf(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
-        return pd.Series(1000.0, index=pd.date_range(s, e, freq="h", tz="UTC"))
+    def _cbf(from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+        return pd.Series(1000.0, index=pd.date_range(start, end, freq="h", tz="UTC"))
 
     client_mock.query_crossborder_flows.side_effect = _cbf
 
@@ -762,10 +762,10 @@ def test_fetch_cross_border_flows_uses_cache_on_second_call(
 
 
 def test_cross_border_flows_computes_net_flow(client_mock: MagicMock, cache_root: Path) -> None:
-    def _cbf(from_a: str, to_a: str, s: pd.Timestamp, e: pd.Timestamp) -> pd.Series:
+    def _cbf(from_a: str, to_a: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
         if "FR" not in (from_a, to_a):
             raise NoMatchingDataError()
-        idx = pd.date_range(s, e, freq="h", tz="UTC")
+        idx = pd.date_range(start, end, freq="h", tz="UTC")
         return pd.Series(200.0 if from_a == "DE_LU" else 80.0, index=idx)
 
     client_mock.query_crossborder_flows.side_effect = _cbf
