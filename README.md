@@ -5,7 +5,7 @@
 
 Day-ahead electricity price forecasting for the German–Luxembourg bidding zone using LightGBM, quantile regression for prediction intervals, and walk-forward backtesting.
 
-**Status:** Under active development (Sprint 1 — data pipeline setup).
+**Status:** Under active development (Sprint 1 — data pipeline complete, EDA data quality and plausibility checks done).
 
 ## Motivation
 
@@ -20,7 +20,6 @@ Python 3.12+, `uv`, pandas + pyarrow, `entsoe-py`, LightGBM, MLflow, Streamlit, 
 ```bash
 uv sync
 cp .env.example .env   # then fill in your ENTSO-E API key
-# download script will follow later in Sprint 1
 ```
 
 ## Project Structure
@@ -30,7 +29,7 @@ cp .env.example .env   # then fill in your ENTSO-E API key
 │   └── processed/
 ├── notebooks/
 ├── src/
-│   └── energy_forecast/
+│   └── energy_price_forecast/
 │       ├── data/
 │       ├── features/
 │       ├── models/

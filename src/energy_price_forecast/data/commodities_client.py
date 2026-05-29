@@ -80,8 +80,9 @@ def fetch_ttf_gas(
     """Fetch daily TTF Natural Gas close prices in EUR/MWh.
 
     Returns a DataFrame with a UTC DatetimeIndex (daily, trading days only) and
-    a single column ``ttf_gas_eur_per_mwh``. Gaps for weekends and holidays are
-    not filled; forward-fill to hourly granularity happens in Sprint 2.
+    a single column ``ttf_gas_eur_per_mwh``. Weekends and holidays are absent at
+    source; forward-fill to hourly granularity (4-day limit) is applied in
+    ``load_all_data`` after merging.
 
     Args:
         start: Inclusive start date. Any timezone is accepted; converted to UTC.
@@ -100,8 +101,10 @@ def fetch_eua_co2(
     """Fetch daily EUA CO2 allowance close prices in EUR/t.
 
     Returns a DataFrame with a UTC DatetimeIndex (daily, trading days only) and
-    a single column ``eua_co2_eur_per_t``. Gaps for weekends and holidays are
-    not filled; forward-fill to hourly granularity happens in Sprint 2.
+    a single column ``eua_co2_eur_per_t``. Weekends and holidays are absent at
+    source; forward-fill to hourly granularity (4-day limit) is applied in
+    ``load_all_data`` after merging. Data is only available from October 2021
+    onward — earlier requests return an empty DataFrame.
 
     Args:
         start: Inclusive start date. Any timezone is accepted; converted to UTC.
