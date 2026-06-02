@@ -10,7 +10,7 @@ from energy_price_forecast.data.entsoe_client import (
     fetch_generation_by_type,
     fetch_load,
     fetch_scheduled_exchanges,
-    fetch_wind_solar_forecast_actual,
+    fetch_wind_solar_forecast,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,8 @@ def load_all_data(
             fetch_load(start_utc, end_utc, area),
         ),
         _log_fetch(
-            "fetch_wind_solar_forecast_actual",
-            fetch_wind_solar_forecast_actual(start_utc, end_utc, area),
+            "fetch_wind_solar_forecast",
+            fetch_wind_solar_forecast(start_utc, end_utc, area),
         ),
         _log_fetch(
             "fetch_generation_by_type",

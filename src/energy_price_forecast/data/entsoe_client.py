@@ -55,9 +55,6 @@ _WIND_SOLAR_COLUMNS = [
     "wind_onshore_forecast",
     "wind_offshore_forecast",
     "solar_forecast",
-    "wind_onshore_actual",
-    "wind_offshore_actual",
-    "solar_actual",
 ]
 
 
@@ -155,7 +152,7 @@ def fetch_load(
     return cached_fetch(start, end, cache_dir, area, fetch_fn)
 
 
-def fetch_wind_solar_forecast_actual(
+def fetch_wind_solar_forecast(
     start: pd.Timestamp,
     end: pd.Timestamp,
     area: str = AREA_DE_LU,
@@ -173,14 +170,6 @@ def fetch_wind_solar_forecast_actual(
             logger.warning("No wind/solar forecast from ENTSO-E for %s–%s", s, e)
             forecast_df = pd.DataFrame()
 
-        try:
-            gen_df = call_with_retry(
-                lambda: client.query_generation(area, start=s, end=e)
-            ).tz_convert("UTC")
-        except NoMatchingDataError:
-            logger.warning("No generation data from ENTSO-E for %s–%s", s, e)
-            gen_df = pd.DataFrame()
-
         parts: list[pd.Series] = []
 
         for src, dst in [
@@ -190,16 +179,6 @@ def fetch_wind_solar_forecast_actual(
         ]:
             if not forecast_df.empty and src in forecast_df.columns:
                 parts.append(forecast_df[src].rename(dst))
-
-        for src, dst in [
-            ("Wind Onshore", "wind_onshore_actual"),
-            ("Wind Offshore", "wind_offshore_actual"),
-            ("Solar", "solar_actual"),
-        ]:
-            if not gen_df.empty:
-                series = _get_gen_series(gen_df, src)
-                if series is not None:
-                    parts.append(series.rename(dst))
 
         if not parts:
             return pd.DataFrame(columns=_WIND_SOLAR_COLUMNS)
