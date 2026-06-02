@@ -49,14 +49,11 @@ def _default_returns(
         "fetch_load": pd.DataFrame(
             {"load_actual": 30_000.0, "load_forecast_day_ahead": 31_000.0}, index=h
         ),
-        "fetch_wind_solar_forecast_actual": pd.DataFrame(
+        "fetch_wind_solar_forecast": pd.DataFrame(
             {
                 "wind_onshore_forecast": 5_000.0,
                 "wind_offshore_forecast": 2_000.0,
                 "solar_forecast": 100.0,
-                "wind_onshore_actual": 4_800.0,
-                "wind_offshore_actual": 1_900.0,
-                "solar_actual": 90.0,
             },
             index=h,
         ),
@@ -143,9 +140,6 @@ def test_load_all_data_returns_expected_columns() -> None:
         "wind_onshore_forecast",
         "wind_offshore_forecast",
         "solar_forecast",
-        "wind_onshore_actual",
-        "wind_offshore_actual",
-        "solar_actual",
         "gen_nuclear",
         "gen_lignite",
         "gen_hard_coal",
@@ -252,14 +246,11 @@ def test_load_all_data_keeps_nans_in_predictors() -> None:
             "wind_onshore_forecast": 5_000.0,
             "wind_offshore_forecast": 2_000.0,
             "solar_forecast": 100.0,
-            "wind_onshore_actual": 4_800.0,
-            "wind_offshore_actual": 1_900.0,
-            "solar_actual": 90.0,
         },
         index=_HOURLY_3D[:60],
     )
 
-    with _patch_fetchers(fetch_wind_solar_forecast_actual=wind_solar_df):
+    with _patch_fetchers(fetch_wind_solar_forecast=wind_solar_df):
         result = load_all_data(_START, _END)
 
     assert len(result) == 72

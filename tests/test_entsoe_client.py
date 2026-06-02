@@ -24,7 +24,7 @@ from energy_price_forecast.data.entsoe_client import (
     fetch_generation_by_type,
     fetch_load,
     fetch_scheduled_exchanges,
-    fetch_wind_solar_forecast_actual,
+    fetch_wind_solar_forecast,
 )
 
 MODULE = "energy_price_forecast.data.entsoe_client"
@@ -266,11 +266,11 @@ def test_fetch_load_preserves_schema_on_partial_failure(
 
 
 # ---------------------------------------------------------------------------
-# fetch_wind_solar_forecast_actual — Test 1: happy path
+# fetch_wind_solar_forecast — Test 1: happy path
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_wind_solar_forecast_actual_returns_expected_columns(
+def test_fetch_wind_solar_forecast_returns_expected_columns(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
     def _forecast_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
@@ -279,16 +279,9 @@ def test_fetch_wind_solar_forecast_actual_returns_expected_columns(
             {"Wind Onshore": 5000.0, "Wind Offshore": 2000.0, "Solar": 100.0}, index=idx
         )
 
-    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(start, end, freq="h", tz="UTC")
-        return pd.DataFrame(
-            {"Wind Onshore": 4800.0, "Wind Offshore": 1900.0, "Solar": 90.0}, index=idx
-        )
-
     client_mock.query_wind_and_solar_forecast.side_effect = _forecast_se
-    client_mock.query_generation.side_effect = _gen_se
 
-    result = fetch_wind_solar_forecast_actual(
+    result = fetch_wind_solar_forecast(
         pd.Timestamp("2024-01-01", tz="UTC"),
         pd.Timestamp("2024-01-03 23:00", tz="UTC"),
     )
@@ -297,9 +290,6 @@ def test_fetch_wind_solar_forecast_actual_returns_expected_columns(
         "wind_onshore_forecast",
         "wind_offshore_forecast",
         "solar_forecast",
-        "wind_onshore_actual",
-        "wind_offshore_actual",
-        "solar_actual",
     }
     assert not result.empty
     assert set(result.columns) == expected
@@ -309,18 +299,17 @@ def test_fetch_wind_solar_forecast_actual_returns_expected_columns(
 
 
 # ---------------------------------------------------------------------------
-# fetch_wind_solar_forecast_actual — Test 2: empty response
+# fetch_wind_solar_forecast — Test 2: empty response
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_wind_solar_forecast_actual_handles_empty_response(
+def test_fetch_wind_solar_forecast_handles_empty_response(
     client_mock: MagicMock, cache_root: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     client_mock.query_wind_and_solar_forecast.side_effect = NoMatchingDataError
-    client_mock.query_generation.side_effect = NoMatchingDataError
 
     with caplog.at_level(logging.WARNING):
-        result = fetch_wind_solar_forecast_actual(
+        result = fetch_wind_solar_forecast(
             pd.Timestamp("2024-01-01", tz="UTC"),
             pd.Timestamp("2024-01-03 23:00", tz="UTC"),
         )
@@ -330,20 +319,17 @@ def test_fetch_wind_solar_forecast_actual_handles_empty_response(
         "wind_onshore_forecast",
         "wind_offshore_forecast",
         "solar_forecast",
-        "wind_onshore_actual",
-        "wind_offshore_actual",
-        "solar_actual",
     }
     assert set(result.columns) == expected
     assert len(caplog.records) > 0
 
 
 # ---------------------------------------------------------------------------
-# fetch_wind_solar_forecast_actual — Test 3: cache hit on second call
+# fetch_wind_solar_forecast — Test 3: cache hit on second call
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_wind_solar_forecast_actual_uses_cache_on_second_call(
+def test_fetch_wind_solar_forecast_uses_cache_on_second_call(
     client_mock: MagicMock, cache_root: Path
 ) -> None:
     def _forecast_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
@@ -352,32 +338,23 @@ def test_fetch_wind_solar_forecast_actual_uses_cache_on_second_call(
             {"Wind Onshore": 5000.0, "Wind Offshore": 2000.0, "Solar": 100.0}, index=idx
         )
 
-    def _gen_se(area: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-        idx = pd.date_range(start, end, freq="h", tz="UTC")
-        return pd.DataFrame(
-            {"Wind Onshore": 4800.0, "Wind Offshore": 1900.0, "Solar": 90.0}, index=idx
-        )
-
     client_mock.query_wind_and_solar_forecast.side_effect = _forecast_se
-    client_mock.query_generation.side_effect = _gen_se
 
     start = pd.Timestamp("2024-01-01", tz="UTC")
     end = pd.Timestamp("2024-01-31 23:00", tz="UTC")
 
-    result1 = fetch_wind_solar_forecast_actual(start, end)
+    result1 = fetch_wind_solar_forecast(start, end)
     forecast_calls = client_mock.query_wind_and_solar_forecast.call_count
-    gen_calls = client_mock.query_generation.call_count
 
-    result2 = fetch_wind_solar_forecast_actual(start, end)
+    result2 = fetch_wind_solar_forecast(start, end)
 
     assert client_mock.query_wind_and_solar_forecast.call_count == forecast_calls
-    assert client_mock.query_generation.call_count == gen_calls
     # Parquet does not preserve DatetimeIndex frequency; check_freq=False ignores that.
     pd.testing.assert_frame_equal(result1, result2, check_freq=False)
 
 
 # ---------------------------------------------------------------------------
-# fetch_wind_solar_forecast_actual — Test 4 (extra): partial sources
+# fetch_wind_solar_forecast — Test 4 (extra): partial sources
 # ---------------------------------------------------------------------------
 
 
@@ -389,9 +366,8 @@ def test_wind_solar_handles_partial_sources(client_mock: MagicMock, cache_root: 
         )
 
     client_mock.query_wind_and_solar_forecast.side_effect = _forecast_se
-    client_mock.query_generation.side_effect = NoMatchingDataError
 
-    result = fetch_wind_solar_forecast_actual(
+    result = fetch_wind_solar_forecast(
         pd.Timestamp("2024-01-01", tz="UTC"),
         pd.Timestamp("2024-01-03 23:00", tz="UTC"),
     )
@@ -400,10 +376,6 @@ def test_wind_solar_handles_partial_sources(client_mock: MagicMock, cache_root: 
     assert "wind_onshore_forecast" in result.columns
     assert "wind_offshore_forecast" in result.columns
     assert "solar_forecast" in result.columns
-    # Actual columns are absent when generation data is unavailable
-    assert "wind_onshore_actual" not in result.columns
-    assert "wind_offshore_actual" not in result.columns
-    assert "solar_actual" not in result.columns
 
 
 # ---------------------------------------------------------------------------
