@@ -85,9 +85,13 @@ def test_vwap_nan_weight_fallback() -> None:
 def test_mean_not_sum_continuity() -> None:
     """After normalisation, load_actual must be ≈ 30 000 MW in both the hourly
     and the 15-min block — not ≈ 120 000 MW in the 15-min block (which would
-    happen if sub-hour values were summed instead of averaged)."""
-    hourly_idx = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
-    qh_idx = pd.date_range("2024-01-01 03:00", periods=12, freq="15min", tz="UTC")
+    happen if sub-hour values were summed instead of averaged).
+
+    Dates straddle the real resolution break (2025-09-30 22:00 UTC) so the
+    synthetic frame mirrors the actual mixed-resolution structure of the dataset.
+    """
+    hourly_idx = pd.date_range("2025-09-30 20:00", periods=3, freq="h", tz="UTC")
+    qh_idx = pd.date_range("2025-09-30 23:00", periods=12, freq="15min", tz="UTC")
     mixed_idx = pd.DatetimeIndex(list(hourly_idx) + list(qh_idx))
 
     df = pd.DataFrame(
