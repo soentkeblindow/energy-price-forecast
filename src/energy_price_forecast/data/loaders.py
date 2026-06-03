@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import pandas as pd
 
@@ -125,4 +126,67 @@ def load_all_data(
 
     logger.info("merged result: %d rows × %d columns", len(df), len(df.columns))
 
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Interim layer — normalised hourly grid
+# ---------------------------------------------------------------------------
+
+_INTERIM_PATH = Path("data/interim/hourly.parquet")
+
+# Timestamp of the resolution break in the raw data (hourly → 15-min).
+_BREAK_TS = pd.Timestamp("2025-09-30 22:00", tz="UTC")
+
+
+def build_interim_hourly(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    path: Path = _INTERIM_PATH,
+    area: str = AREA_DE_LU,
+) -> pd.DataFrame:
+    """Fetch raw data, normalise to an hourly grid, and persist as Parquet.
+
+    The resulting DataFrame is written to `path` and also returned so the
+    caller can inspect it without a second read. If the parent directory does
+    not exist it is created automatically.
+
+    After writing, logs daily mean load for the two days on either side of
+    the resolution break as a continuity sanity check.
+    """
+    from energy_price_forecast.data.normalize import to_hourly
+
+    raw = load_all_data(start, end, area)
+    hourly = to_hourly(raw)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hourly.to_parquet(path)
+    logger.info("wrote %d hourly rows to %s", len(hourly), path)
+
+    # Continuity sanity: daily mean load around the resolution break.
+    window_start = _BREAK_TS - pd.Timedelta("2D")
+    window_end = _BREAK_TS + pd.Timedelta("2D")
+    if "load_actual" in hourly.columns:
+        snippet = hourly.loc[window_start:window_end, "load_actual"]
+        daily = snippet.resample("D").mean()
+        logger.info(
+            "load_actual daily mean around resolution break (MW):\n%s",
+            daily.to_string(),
+        )
+
+    return hourly
+
+
+def load_interim_hourly(path: Path = _INTERIM_PATH) -> pd.DataFrame:
+    """Load the normalised hourly DataFrame from Parquet.
+
+    Raises FileNotFoundError if the file does not exist (run
+    build_interim_hourly first).
+    """
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Interim Parquet not found at {path!r}. Run build_interim_hourly() to generate it."
+        )
+    df = pd.read_parquet(path)
+    logger.info("loaded %d hourly rows from %s", len(df), path)
     return df
