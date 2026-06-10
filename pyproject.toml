@@ -122,4 +122,6 @@ addopts = [
 # the cosmetic BeautifulSoup warning until entsoe-py upgrades to features="xml".
 filterwarnings = [
     "ignore::bs4.XMLParsedAsHTMLWarning",
+    # file:// MLflow store is intentional (local portfolio setup); deprecation is expected
+    "ignore::FutureWarning:mlflow",
 ]
