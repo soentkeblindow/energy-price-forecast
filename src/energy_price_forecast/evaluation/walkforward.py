@@ -5,8 +5,7 @@ from typing import Literal, Protocol
 import numpy as np
 import pandas as pd
 
-LOCAL_TZ = "Europe/Berlin"
-GATE_CLOSURE_LOCAL_HOUR = 12  # EPEX day-ahead gate closure: 12:00 local time on D-1
+from ..market_time import GATE_CLOSURE_LOCAL_HOUR, LOCAL_TZ
 
 
 @dataclass(frozen=True)
