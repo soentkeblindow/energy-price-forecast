@@ -23,6 +23,7 @@ cp .env.example .env   # then fill in your ENTSO-E API key
 ```
 
 ## Project Structure
+```text
 ├── data/
 │   ├── raw/
 │   ├── interim/
@@ -37,6 +38,7 @@ cp .env.example .env   # then fill in your ENTSO-E API key
 │       └── dashboard/
 ├── scripts/
 └── tests/
+```
 
 ## Disclaimer
 
