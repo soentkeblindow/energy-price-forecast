@@ -2,10 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_price_forecast.features.availability import assert_no_leakage
+from energy_price_forecast.features.availability import LeakageError, assert_no_leakage
 from energy_price_forecast.features.calendar import build_calendar_features
 from energy_price_forecast.features.config import FeatureConfig  # noqa: F401
-from energy_price_forecast.features.fundamentals import build_forecast_fundamentals
+from energy_price_forecast.features.fundamentals import (
+    build_commodity_features,
+    build_forecast_fundamentals,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -225,3 +228,51 @@ def test_renewable_share_forecast_value() -> None:
 def test_forecast_fundamentals_pass_leakage() -> None:
     df, idx = _make_fc_df()
     assert_no_leakage(build_forecast_fundamentals(df, idx))
+
+
+# ---------------------------------------------------------------------------
+# Commodity features
+# ---------------------------------------------------------------------------
+
+
+def _make_commodity_df(periods: int = 5 * 24) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+    idx = pd.date_range("2024-01-01 00:00", periods=periods, freq="h", tz="UTC")
+    eua_vals = np.full(periods, 70.0)
+    eua_vals[:24] = np.nan  # first 24 hours NaN (pre-EUA placeholder)
+    df = pd.DataFrame(
+        {
+            "ttf_gas_eur_per_mwh": np.full(periods, 30.0),
+            "eua_co2_eur_per_t": eua_vals,
+        },
+        index=idx,
+    )
+    return df, idx
+
+
+def test_commodity_features_pass_leakage() -> None:
+    df, idx = _make_commodity_df()
+    assert_no_leakage(build_commodity_features(df, idx))
+
+
+def test_eua_missing_flag_where_nan() -> None:
+    df, idx = _make_commodity_df()
+    feats = {f.name: f for f in build_commodity_features(df, idx)}
+    # target[48] -> source[0] (NaN eua) -> missing = 1
+    assert feats["eua_missing"].values.iloc[48] == 1
+    # target[72] -> source[24] (eua = 70.0) -> missing = 0
+    assert feats["eua_missing"].values.iloc[72] == 0
+
+
+def test_commodity_feature_name_from_config() -> None:
+    cfg = FeatureConfig(commodity_lag_hours=72)
+    df, idx = _make_commodity_df(periods=7 * 24)
+    feats = {f.name: f for f in build_commodity_features(df, idx, cfg)}
+    assert "ttf_gas_lag_72h" in feats
+    assert "eua_co2_lag_72h" in feats
+
+
+def test_commodity_lag_24h_fails_leakage() -> None:
+    cfg = FeatureConfig(commodity_lag_hours=24)
+    df, idx = _make_commodity_df()
+    with pytest.raises(LeakageError):
+        assert_no_leakage(build_commodity_features(df, idx, cfg))
