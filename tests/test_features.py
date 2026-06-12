@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from energy_price_forecast.features.availability import LeakageError, assert_no_leakage
+from energy_price_forecast.features.build import build_feature_matrix
 from energy_price_forecast.features.calendar import build_calendar_features
 from energy_price_forecast.features.config import FeatureConfig  # noqa: F401
 from energy_price_forecast.features.fundamentals import (
@@ -276,3 +277,57 @@ def test_commodity_lag_24h_fails_leakage() -> None:
     df, idx = _make_commodity_df()
     with pytest.raises(LeakageError):
         assert_no_leakage(build_commodity_features(df, idx, cfg))
+
+
+# ---------------------------------------------------------------------------
+# build_feature_matrix — integration
+# ---------------------------------------------------------------------------
+
+
+def _make_full_df(periods: int = 5 * 24) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01 00:00", periods=periods, freq="h", tz="UTC")
+    return pd.DataFrame(
+        {
+            "load_forecast_day_ahead": np.full(periods, 40000.0),
+            "wind_onshore_forecast": np.full(periods, 8000.0),
+            "wind_offshore_forecast": np.full(periods, 2000.0),
+            "solar_forecast": np.full(periods, 5000.0),
+            "ttf_gas_eur_per_mwh": np.full(periods, 30.0),
+            "eua_co2_eur_per_t": np.full(periods, 70.0),
+        },
+        index=idx,
+    )
+
+
+def test_build_feature_matrix_passes_leakage_and_shape() -> None:
+    df = _make_full_df()
+    x = build_feature_matrix(df)
+    assert len(x) == len(df)
+
+
+def test_build_feature_matrix_expected_columns() -> None:
+    df = _make_full_df()
+    x = build_feature_matrix(df)
+    expected = {
+        "hour_sin",
+        "hour_cos",
+        "weekday_sin",
+        "weekday_cos",
+        "month_sin",
+        "month_cos",
+        "is_weekend",
+        "is_holiday",
+        "is_regional_holiday",
+        "is_crisis",
+        "is_post_crisis",
+        "load_forecast_day_ahead",
+        "wind_onshore_forecast",
+        "wind_offshore_forecast",
+        "solar_forecast",
+        "residual_load_forecast",
+        "renewable_share_forecast",
+        "ttf_gas_lag_48h",
+        "eua_co2_lag_48h",
+        "eua_missing",
+    }
+    assert set(x.columns) == expected
