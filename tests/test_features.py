@@ -1,8 +1,11 @@
+import numpy as np
 import pandas as pd
 import pytest
 
+from energy_price_forecast.features.availability import assert_no_leakage
 from energy_price_forecast.features.calendar import build_calendar_features
 from energy_price_forecast.features.config import FeatureConfig  # noqa: F401
+from energy_price_forecast.features.fundamentals import build_forecast_fundamentals
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -184,3 +187,41 @@ def test_regime_custom_config_boundaries() -> None:
     feats = {f.name: f for f in build_calendar_features(idx, cfg)}
     assert feats["is_crisis"].values.iloc[0] == 1
     assert feats["is_post_crisis"].values.iloc[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Forecast fundamentals
+# ---------------------------------------------------------------------------
+
+
+def _make_fc_df(periods: int = 48) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+    idx = pd.date_range("2024-01-01 00:00", periods=periods, freq="h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "load_forecast_day_ahead": np.full(periods, 40000.0),
+            "wind_onshore_forecast": np.full(periods, 8000.0),
+            "wind_offshore_forecast": np.full(periods, 2000.0),
+            "solar_forecast": np.full(periods, 5000.0),
+        },
+        index=idx,
+    )
+    return df, idx
+
+
+def test_residual_load_forecast_value() -> None:
+    df, idx = _make_fc_df()
+    feats = {f.name: f for f in build_forecast_fundamentals(df, idx)}
+    expected = 40000.0 - 8000.0 - 2000.0 - 5000.0
+    assert feats["residual_load_forecast"].values.to_numpy() == pytest.approx(expected)
+
+
+def test_renewable_share_forecast_value() -> None:
+    df, idx = _make_fc_df()
+    feats = {f.name: f for f in build_forecast_fundamentals(df, idx)}
+    expected = (8000.0 + 2000.0 + 5000.0) / 40000.0
+    assert feats["renewable_share_forecast"].values.to_numpy() == pytest.approx(expected)
+
+
+def test_forecast_fundamentals_pass_leakage() -> None:
+    df, idx = _make_fc_df()
+    assert_no_leakage(build_forecast_fundamentals(df, idx))
