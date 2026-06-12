@@ -280,7 +280,7 @@ def test_commodity_lag_24h_fails_leakage() -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_feature_matrix — integration
+# build_feature_matrix — wiring (all builders together, synthetic data)
 # ---------------------------------------------------------------------------
 
 
