@@ -36,7 +36,9 @@ def knowledge_time(cls: Availability, value_index: pd.DatetimeIndex) -> pd.Datet
     if cls is Availability.RT_ACTUAL:
         return value_index + RT_ACTUAL_LAG
     if cls is Availability.DA_FIXED:
-        return _local_day(value_index).tz_convert("UTC")
+        # Convert local day (CET) to UTC midnight (e.g., 2024-01-03 CET → 2024-01-03 00:00 UTC).
+        # This ensures knowledge_time ≤ gate_closure (11:00 UTC) for all target rows.
+        return _local_day(value_index).tz_convert("UTC").normalize()
     if cls is Availability.DA_FORECAST:
         return gate_closure_for_index(value_index)
     if cls is Availability.COMMODITY:
@@ -185,6 +187,44 @@ def assert_no_leakage(features: Sequence[Feature]) -> None:
             raise LeakageError(
                 f"feature {f.name!r}: {n} row(s) known after gate closure (first at {first})"
             )
+
+
+def rolling_mean(
+    name: str,
+    raw: pd.Series,
+    column: str,
+    *,
+    window_hours: int,
+    lag_hours: int,
+    target_index: pd.DatetimeIndex,
+) -> Feature:
+    """Trailing rolling mean of a raw column, aligned to a target index.
+
+    The window is a backward-looking mean over `window_hours` whose leading
+    (most recent) edge sits `lag_hours` before each target timestamp:
+
+        value(t) = mean( raw[t - lag_hours - window_hours + 1h : t - lag_hours] )
+
+    Knowledge time = that of the raw column's availability class at the leading
+    edge (t - lag_hours). The leading edge is the latest input in the window, so
+    by the max-composition rule it gates the whole mean (all earlier points in
+    the window are known no later than the leading edge).
+
+    Assumes a regular hourly grid (guaranteed by step 2.1); the window is given
+    in whole hours and used as an integer period count.
+    """
+    if lag_hours < 1:
+        raise ValueError("lag_hours must be >= 1")
+    if window_hours < 1:
+        raise ValueError("window_hours must be >= 1")
+    cls = availability_of(column)
+    # Rolling mean at value time first (min_periods = full window -> warm-up = NaN),
+    # then shift the leading edge `lag_hours` back relative to each target.
+    rolled = raw.rolling(window=window_hours, min_periods=window_hours).mean()
+    leading_edge = target_index - pd.Timedelta(hours=lag_hours)
+    values = pd.Series(rolled.reindex(leading_edge).to_numpy(), index=target_index, name=name)
+    kt = pd.Series(knowledge_time(cls, leading_edge), index=target_index)
+    return Feature(name, values, kt)
 
 
 def build_matrix(features: Sequence[Feature]) -> pd.DataFrame:
