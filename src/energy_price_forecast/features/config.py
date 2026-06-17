@@ -17,8 +17,11 @@ class FeatureConfig:
     collected here rather than scattered across modules.
     """
 
-    # Commodities: 48h is the minimum safe lag (lands on <= D-2 at gate closure).
-    commodity_lag_hours: int = 48
+    # Commodities: 72h is required (not 48h). In CEST (UTC+2), a 48h lag can land
+    # on D-1 local at the fall DST transition, where the settlement is unknown at
+    # gate closure (10:00 UTC). 72h always sources from D-3 or earlier -- safe in
+    # all DST cases. assert_no_leakage catches any regression.
+    commodity_lag_hours: int = 72
 
     # Crisis-regime boundaries (Europe/Berlin local dates), from the EDA (3.0, D2).
     crisis_start: pd.Timestamp = pd.Timestamp("2021-09-01", tz=LOCAL_TZ)
