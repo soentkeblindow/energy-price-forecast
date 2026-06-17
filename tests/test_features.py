@@ -36,7 +36,7 @@ def _hourly_utc(start: str, periods: int) -> pd.DatetimeIndex:
 
 def test_feature_config_defaults() -> None:
     cfg = FeatureConfig()
-    assert cfg.commodity_lag_hours == 72
+    assert cfg.commodity_lag_hours == 48
     assert cfg.crisis_start == pd.Timestamp("2021-09-01", tz="Europe/Berlin")
     assert cfg.post_crisis_start == pd.Timestamp("2023-04-01", tz="Europe/Berlin")
 
@@ -267,10 +267,10 @@ def test_commodity_features_pass_leakage() -> None:
 def test_eua_missing_flag_where_nan() -> None:
     df, idx = _make_commodity_df()
     feats = {f.name: f for f in build_commodity_features(df, idx)}
-    # target[72] -> source[0] (NaN eua) -> missing = 1
-    assert feats["eua_missing"].values.iloc[72] == 1
-    # target[96] -> source[24] (eua = 70.0) -> missing = 0
-    assert feats["eua_missing"].values.iloc[96] == 0
+    # target[48] -> source[0] (NaN eua) -> missing = 1
+    assert feats["eua_missing"].values.iloc[48] == 1
+    # target[72] -> source[24] (eua = 70.0) -> missing = 0
+    assert feats["eua_missing"].values.iloc[72] == 0
 
 
 def test_commodity_feature_name_from_config() -> None:
@@ -362,8 +362,8 @@ def test_build_feature_matrix_expected_columns() -> None:
         "solar_forecast",
         "residual_load_forecast",
         "renewable_share_forecast",
-        "ttf_gas_lag_72h",
-        "eua_co2_lag_72h",
+        "ttf_gas_lag_48h",
+        "eua_co2_lag_48h",
         "eua_missing",
         # 2.3.3 features
         "price_lag_24h",
@@ -576,7 +576,7 @@ def test_trim_warmup_preserves_eua_nan_region() -> None:
     """Test that trim_warmup does NOT drop the intentional EUA NaN region."""
     idx = pd.date_range("2021-09-01 00:00", periods=200, freq="h", tz="UTC")  # Post-crisis start
     eua_vals = np.full(200, 70.0)
-    # max_lookback_hours = 191; eua_co2_lag_72h at row 191 looks back to row 143.
+    # max_lookback_hours = 191; eua_co2_lag_48h at row 191 looks back to row 143.
     # NaN must extend past row 143 to survive the trim.
     eua_vals[:150] = np.nan
     df = pd.DataFrame(
@@ -602,6 +602,6 @@ def test_trim_warmup_preserves_eua_nan_region() -> None:
     trimmed = trim_warmup(matrix)
 
     # EUA NaN region should survive (pre-Oct-2021)
-    assert trimmed["eua_co2_lag_72h"].isna().any()
+    assert trimmed["eua_co2_lag_48h"].isna().any()
     # Other features should have no NaN after warm-up
     assert not trimmed["price_lag_24h"].isna().any()

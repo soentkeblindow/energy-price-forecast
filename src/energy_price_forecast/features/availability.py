@@ -41,7 +41,11 @@ def knowledge_time(cls: Availability, value_index: pd.DatetimeIndex) -> pd.Datet
     if cls is Availability.DA_FORECAST:
         return gate_closure_for_index(value_index)
     if cls is Availability.COMMODITY:
-        return (_local_day(value_index) + pd.DateOffset(days=1)).tz_convert("UTC")
+        # UTC midnight of the day after the source's UTC date. Anchoring in UTC
+        # (not local time) avoids the fall DST trap: in CEST, local midnight is
+        # 22:00 UTC, which can land after gate closure (10:00 UTC) on transition
+        # days. Daily settlements close ~16:00 UTC, so next UTC midnight is safe.
+        return value_index.normalize() + pd.Timedelta(days=1)
     raise ValueError(f"unknown availability class {cls!r}")
 
 

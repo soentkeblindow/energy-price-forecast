@@ -62,11 +62,13 @@ def test_knowledge_time_da_forecast_equals_gate_closure_of_value_day() -> None:
     assert (result == gate_closure_for_index(idx)).all()
 
 
-def test_knowledge_time_commodity_is_next_local_midnight() -> None:
-    # 2024-01-15 10:00 UTC = 11:00 CET; next midnight = 2024-01-16 00:00 CET = 2024-01-15 23:00 UTC
+def test_knowledge_time_commodity_is_next_utc_midnight() -> None:
+    # Formula is UTC-anchored (not local): avoids CEST fall-DST trap where
+    # local midnight (22:00 UTC) can land after gate closure (10:00 UTC).
+    # 2024-01-15 10:00 UTC -> next UTC midnight = 2024-01-16 00:00 UTC.
     idx = pd.DatetimeIndex(["2024-01-15 10:00"], tz="UTC")
     result = knowledge_time(Availability.COMMODITY, idx)
-    assert result[0] == pd.Timestamp("2024-01-15 23:00", tz="UTC")
+    assert result[0] == pd.Timestamp("2024-01-16 00:00", tz="UTC")
 
 
 # ---------------------------------------------------------------------------
