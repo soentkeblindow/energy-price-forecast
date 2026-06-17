@@ -36,9 +36,8 @@ def knowledge_time(cls: Availability, value_index: pd.DatetimeIndex) -> pd.Datet
     if cls is Availability.RT_ACTUAL:
         return value_index + RT_ACTUAL_LAG
     if cls is Availability.DA_FIXED:
-        # Convert local day (CET) to UTC midnight (e.g., 2024-01-03 CET → 2024-01-03 00:00 UTC).
-        # This ensures knowledge_time ≤ gate_closure (11:00 UTC) for all target rows.
-        return _local_day(value_index).tz_convert("UTC").normalize()
+        # CET midnight in UTC (e.g., 2024-01-03 00:00 CET = 2024-01-02 23:00 UTC).
+        return _local_day(value_index).tz_convert("UTC")
     if cls is Availability.DA_FORECAST:
         return gate_closure_for_index(value_index)
     if cls is Availability.COMMODITY:
