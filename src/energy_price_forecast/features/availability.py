@@ -7,7 +7,7 @@ from enum import Enum, auto
 import numpy as np
 import pandas as pd
 
-from ..market_time import _local_day, gate_closure_for_index
+from ..market_time import gate_closure_for_index
 
 # Publication lag of real-time actuals on the ENTSO-E Transparency Platform (~1 h).
 # Conservative bumping is allowed; a larger lag can only reject more, never accept.
@@ -36,8 +36,11 @@ def knowledge_time(cls: Availability, value_index: pd.DatetimeIndex) -> pd.Datet
     if cls is Availability.RT_ACTUAL:
         return value_index + RT_ACTUAL_LAG
     if cls is Availability.DA_FIXED:
-        # CET midnight in UTC (e.g., 2024-01-03 00:00 CET = 2024-01-02 23:00 UTC).
-        return _local_day(value_index).tz_convert("UTC")
+        # UTC midnight of the source's UTC date. Anchoring in UTC (not local time)
+        # avoids the fall DST trap: in CEST a 24h lag can land on local delivery-day
+        # midnight (22:00 UTC), which is 12 h after gate closure (10:00 UTC). UTC
+        # midnight (00:00) is always before gate closure (10-11 UTC) on any UTC day.
+        return value_index.normalize()
     if cls is Availability.DA_FORECAST:
         return gate_closure_for_index(value_index)
     if cls is Availability.COMMODITY:

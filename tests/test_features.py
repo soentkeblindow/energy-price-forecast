@@ -416,9 +416,8 @@ def test_rolling_mean_knowledge_time() -> None:
     )
 
     # Leading edge for target_idx[0] = 2024-01-03 00:00 UTC - 2h = 2024-01-02 22:00 UTC.
-    # CET = UTC+1 in January: 22:00 UTC = 23:00 CET → local day = 2024-01-02.
-    # DA_FIXED: _local_day → 2024-01-02 00:00 CET → tz_convert("UTC") → 2024-01-01 23:00 UTC.
-    expected_kt = pd.Timestamp("2024-01-01 23:00", tz="UTC")
+    # DA_FIXED (UTC-anchored): normalize(2024-01-02 22:00 UTC) = 2024-01-02 00:00 UTC.
+    expected_kt = pd.Timestamp("2024-01-02 00:00", tz="UTC")
     assert feature.knowledge_time.iloc[0] == expected_kt
 
     # Same for window=6 (knowledge_time unchanged)

@@ -49,11 +49,12 @@ def test_knowledge_time_rt_actual_is_t_plus_1h() -> None:
     assert (result == idx + pd.Timedelta(hours=1)).all()
 
 
-def test_knowledge_time_da_fixed_is_local_midnight_of_value_day() -> None:
-    # 2024-01-15 10:00 UTC = 11:00 CET; local day = 2024-01-15; midnight = 2024-01-14 23:00 UTC
+def test_knowledge_time_da_fixed_is_utc_midnight() -> None:
+    # UTC-anchored: normalize floors to UTC midnight of the source's UTC date.
+    # 2024-01-15 10:00 UTC → 2024-01-15 00:00 UTC (not local midnight 23:00 UTC prev day).
     idx = pd.DatetimeIndex(["2024-01-15 10:00"], tz="UTC")
     result = knowledge_time(Availability.DA_FIXED, idx)
-    assert result[0] == pd.Timestamp("2024-01-14 23:00", tz="UTC")
+    assert result[0] == pd.Timestamp("2024-01-15 00:00", tz="UTC")
 
 
 def test_knowledge_time_da_forecast_equals_gate_closure_of_value_day() -> None:
