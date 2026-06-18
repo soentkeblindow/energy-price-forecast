@@ -1,10 +1,4 @@
-"""Unit tests for the load_all_data orchestrator.
-
-All eight fetcher functions are mocked via ExitStack so no real API calls
-are made. The tests cover column inventory, commodity forward-fill (normal
-and limit), target filtering, outer-join NaN preservation, input validation,
-and naive-timestamp normalisation.
-"""
+"""Unit tests for data loaders: load_all_data and load_processed_features."""
 
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
@@ -14,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from energy_price_forecast.data.loaders import load_all_data
+from energy_price_forecast.data.loaders import load_all_data, load_processed_features
 
 MODULE = "energy_price_forecast.data.loaders"
 
@@ -286,3 +280,27 @@ def test_load_all_data_normalizes_naive_timestamps() -> None:
     assert isinstance(called_start, pd.Timestamp)
     assert called_start.tzinfo is not None
     assert str(called_start.tz) == "UTC"
+
+
+# ---------------------------------------------------------------------------
+# load_processed_features
+# ---------------------------------------------------------------------------
+
+
+def test_load_processed_features_loads_parquet(tmp_path: pytest.TempPathFactory) -> None:
+    idx = pd.date_range("2021-01-01", periods=48, freq="h", tz="UTC")
+    df = pd.DataFrame({"feat_a": 1.0, "feat_b": 2.0}, index=idx)
+    path = tmp_path / "features.parquet"  # type: ignore[operator]
+    df.to_parquet(path)
+
+    result = load_processed_features(path)
+
+    assert isinstance(result, pd.DataFrame)
+    assert list(result.columns) == ["feat_a", "feat_b"]
+    assert len(result) == 48
+
+
+def test_load_processed_features_missing_file_raises(tmp_path: pytest.TempPathFactory) -> None:
+    missing = tmp_path / "does_not_exist.parquet"  # type: ignore[operator]
+    with pytest.raises(FileNotFoundError, match="build_features.py"):
+        load_processed_features(missing)

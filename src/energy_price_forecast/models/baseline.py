@@ -1,4 +1,10 @@
+import numpy as np
 import pandas as pd
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LassoCV
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from energy_price_forecast.evaluation.walkforward import LOCAL_TZ
 
@@ -36,3 +42,67 @@ class SimilarDayNaive:
         lagged_utc = test_index - lag
         values = history.reindex(lagged_utc).to_numpy()
         return pd.Series(values, index=test_index, name="y_pred")
+
+
+class LassoForecaster:
+    """Lasso baseline on the engineered feature matrix.
+
+    Block-forecast (one prediction per delivery day) consistent with D3. Per
+    refit the harness calls fit(y_train, x_train); per delivery day it calls
+    predict(test_index, history=..., x_test=...).
+
+    Leakage contract (see spec section 3): imputation median, scaler statistics
+    and the cross-validated alpha are fitted on x_train ONLY. predict applies
+    the train-fitted transforms. The asinh target transform is parameter-free
+    and is inverted (sinh) before predictions are returned, so the harness and
+    the metrics module see EUR/MWh -- comparable to the naive baseline.
+    """
+
+    def __init__(
+        self,
+        *,
+        cv_splits: int = 5,
+        max_iter: int = 5000,
+        random_state: int = 0,
+        n_jobs: int | None = None,
+    ) -> None:
+        self.cv_splits = cv_splits
+        self.max_iter = max_iter
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self._pipeline: Pipeline | None = None
+        self._columns: pd.Index | None = None
+
+    def fit(self, y_train: pd.Series, x_train: pd.DataFrame | None = None) -> None:
+        if x_train is None:
+            raise ValueError("LassoForecaster requires a feature matrix (x_train)")
+        mask = y_train.notna()
+        x = x_train.loc[mask]
+        y = y_train.loc[mask]
+        self._columns = x.columns
+        self._pipeline = make_pipeline(
+            SimpleImputer(strategy="median", keep_empty_features=True),
+            StandardScaler(),
+            LassoCV(
+                cv=TimeSeriesSplit(n_splits=self.cv_splits),
+                max_iter=self.max_iter,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+            ),
+        )
+        self._pipeline.fit(x.to_numpy(), np.arcsinh(y.to_numpy()))
+
+    def predict(
+        self,
+        test_index: pd.DatetimeIndex,
+        *,
+        history: pd.Series,
+        x_test: pd.DataFrame | None = None,
+    ) -> pd.Series:
+        if self._pipeline is None or self._columns is None:
+            raise RuntimeError("predict called before fit")
+        if x_test is None:
+            raise ValueError("LassoForecaster requires a feature matrix (x_test)")
+        x = x_test.reindex(columns=self._columns)
+        pred_asinh = self._pipeline.predict(x.to_numpy())
+        return pd.Series(np.sinh(pred_asinh), index=test_index, name="y_pred")

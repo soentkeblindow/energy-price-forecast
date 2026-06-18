@@ -190,3 +190,32 @@ def load_interim_hourly(path: Path = _INTERIM_PATH) -> pd.DataFrame:
     df = pd.read_parquet(path)
     logger.info("loaded %d hourly rows from %s", len(df), path)
     return df
+
+
+# ---------------------------------------------------------------------------
+# Processed layer — engineered feature matrix
+# ---------------------------------------------------------------------------
+
+_FEATURES_PATH = Path("data/processed/features.parquet")
+
+
+def load_processed_features(
+    path: str | Path = _FEATURES_PATH,
+) -> pd.DataFrame:
+    """Load the engineered feature matrix (X only, no target) from step 2.3.
+
+    The matrix carries a UTC DatetimeIndex on a regular hourly grid, already
+    warm-up-trimmed. NaN is expected only in the EUA-CO2 region (pre-Oct-2021,
+    by design D4); model-side imputation happens in the LassoForecaster.
+
+    Fails loudly with a pointer to scripts/build_features.py if the file is
+    missing -- never silently return an empty frame.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"processed features not found at {path} -- run scripts/build_features.py first"
+        )
+    df = pd.read_parquet(path)
+    logger.info("loaded %d feature rows from %s", len(df), path)
+    return df

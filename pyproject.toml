@@ -94,6 +94,7 @@ exclude = ["notebooks/", ".venv/"]
 module = [
     "entsoe.*",
     "lightgbm.*",
+    "sklearn.*",
     "yfinance.*",
     "shap.*",
     "statsmodels.*",
