@@ -196,3 +196,40 @@ def test_leakage_contract_separate_pipelines() -> None:
     pred_b = m_b.predict(test_idx, history=y_b, x_test=x_test)
 
     assert not pred_a.equals(pred_b), "predictions must differ for different training distributions"
+
+
+# ---------------------------------------------------------------------------
+# target_transform parameter
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_target_transform_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="unknown target_transform"):
+        LassoForecaster(target_transform="log")
+
+
+def test_identity_transform_smoke() -> None:
+    y_train, x_train, test_idx, x_test = _make_xy()
+    model = LassoForecaster(cv_splits=3, target_transform="identity")
+    model.fit(y_train, x_train)
+    result = model.predict(test_idx, history=y_train, x_test=x_test)
+
+    assert isinstance(result, pd.Series)
+    assert result.notna().all()
+    # identity transform: predictions live on the raw scale (not compressed ~0-8)
+    assert result.abs().mean() > 5.0
+
+
+def test_asinh_regression_matches_default() -> None:
+    """Explicit target_transform='asinh' must produce the same predictions as the default."""
+    y_train, x_train, test_idx, x_test = _make_xy()
+
+    m_default = LassoForecaster(cv_splits=3, random_state=0)
+    m_default.fit(y_train, x_train)
+    p_default = m_default.predict(test_idx, history=y_train, x_test=x_test)
+
+    m_explicit = LassoForecaster(cv_splits=3, random_state=0, target_transform="asinh")
+    m_explicit.fit(y_train, x_train)
+    p_explicit = m_explicit.predict(test_idx, history=y_train, x_test=x_test)
+
+    pd.testing.assert_series_equal(p_default, p_explicit)

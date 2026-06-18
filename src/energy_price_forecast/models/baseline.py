@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
@@ -7,6 +9,14 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from energy_price_forecast.evaluation.walkforward import LOCAL_TZ
+
+_Fn = Callable[..., np.ndarray]
+
+# forward (apply before fit) and inverse (apply after predict)
+_TARGET_TRANSFORMS: dict[str, tuple[_Fn, _Fn]] = {
+    "asinh": (np.arcsinh, np.sinh),
+    "identity": (lambda a: a, lambda a: a),
+}
 
 # Weekdays (Mon=0 … Sun=6) for which the 24-hour lag applies (Tue–Fri).
 # All other weekdays (Mon, Sat, Sun) use the 168-hour (7-day) lag.
@@ -61,11 +71,15 @@ class LassoForecaster:
     def __init__(
         self,
         *,
+        target_transform: str = "asinh",
         cv_splits: int = 5,
         max_iter: int = 5000,
         random_state: int = 0,
         n_jobs: int | None = None,
     ) -> None:
+        if target_transform not in _TARGET_TRANSFORMS:
+            raise ValueError(f"unknown target_transform: {target_transform!r}")
+        self.target_transform = target_transform
         self.cv_splits = cv_splits
         self.max_iter = max_iter
         self.random_state = random_state
@@ -90,7 +104,8 @@ class LassoForecaster:
                 n_jobs=self.n_jobs,
             ),
         )
-        self._pipeline.fit(x.to_numpy(), np.arcsinh(y.to_numpy()))
+        forward, _ = _TARGET_TRANSFORMS[self.target_transform]
+        self._pipeline.fit(x.to_numpy(), forward(y.to_numpy()))
 
     def predict(
         self,
@@ -104,5 +119,7 @@ class LassoForecaster:
         if x_test is None:
             raise ValueError("LassoForecaster requires a feature matrix (x_test)")
         x = x_test.reindex(columns=self._columns)
-        pred_asinh = self._pipeline.predict(x.to_numpy())
-        return pd.Series(np.sinh(pred_asinh), index=test_index, name="y_pred")
+        _, inverse = _TARGET_TRANSFORMS[self.target_transform]
+        return pd.Series(
+            inverse(self._pipeline.predict(x.to_numpy())), index=test_index, name="y_pred"
+        )

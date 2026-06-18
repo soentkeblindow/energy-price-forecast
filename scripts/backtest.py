@@ -15,9 +15,16 @@ from energy_price_forecast.evaluation.walkforward import run_backtest, walk_forw
 from energy_price_forecast.models.baseline import LassoForecaster, SimilarDayNaive
 
 
+def _fingerprint(df: pd.DataFrame) -> str:
+    return f"{df.index.min()}_{df.index.max()}_{df.shape}"
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Walk-forward backtest (naive or lasso).")
     p.add_argument("--model", default="naive", choices=["naive", "lasso"])
+    p.add_argument("--target-transform", default="asinh", choices=["asinh", "identity"])
+    p.add_argument("--study", default="adhoc", help="MLflow tag: logical study grouping.")
+    p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
     p.add_argument("--test-start", default="2021-01-01")
     p.add_argument("--test-end", default=None)
     p.add_argument("--window", default="expanding", choices=["expanding", "rolling"])
@@ -52,10 +59,15 @@ def main() -> None:
         out = args.out or Path("data/processed/backtest_similarday.parquet")
         log_params: dict[str, object] = {
             "model": "similarday_naive",
+            "target_transform": "none",
             "window": args.window,
             "refit_every": refit_every,
             "test_start": args.test_start,
             "test_end": str(args.test_end),
+        }
+        log_tags: dict[str, str] = {
+            "study": args.study,
+            "note": args.note,
         }
     else:
         refit_every = args.refit_every if args.refit_every is not None else 7
@@ -65,18 +77,25 @@ def main() -> None:
         x = features
         index = pd.DatetimeIndex(features.index)
         model = LassoForecaster(
+            target_transform=args.target_transform,
             cv_splits=args.cv_splits,
             n_jobs=args.n_jobs,
         )
-        run_name = "lasso"
+        run_name = f"lasso_{args.target_transform}"
         out = args.out or Path("data/processed/backtest_lasso.parquet")
         log_params = {
             "model": "lasso",
+            "target_transform": args.target_transform,
             "window": args.window,
             "refit_every": refit_every,
             "cv_splits": args.cv_splits,
             "test_start": args.test_start,
             "test_end": str(args.test_end),
+        }
+        log_tags = {
+            "study": args.study,
+            "note": args.note,
+            "features_fingerprint": _fingerprint(features),
         }
 
     folds = list(
@@ -97,6 +116,7 @@ def main() -> None:
 
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params(log_params)
+        mlflow.set_tags(log_tags)
         mlflow.log_metrics(summary)
         out.parent.mkdir(parents=True, exist_ok=True)
         predictions.to_parquet(out)
