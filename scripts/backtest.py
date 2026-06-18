@@ -12,7 +12,12 @@ from energy_price_forecast.data.loaders import load_interim_hourly, load_process
 from energy_price_forecast.evaluation.config import EXPERIMENT_NAME
 from energy_price_forecast.evaluation.metrics import summarise
 from energy_price_forecast.evaluation.walkforward import run_backtest, walk_forward_splits
-from energy_price_forecast.models.baseline import LassoForecaster, SimilarDayNaive
+from energy_price_forecast.models.baseline import (
+    LassoForecaster,
+    OLSForecaster,
+    RidgeForecaster,
+    SimilarDayNaive,
+)
 
 
 def _fingerprint(df: pd.DataFrame) -> str:
@@ -21,7 +26,7 @@ def _fingerprint(df: pd.DataFrame) -> str:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Walk-forward backtest (naive or lasso).")
-    p.add_argument("--model", default="naive", choices=["naive", "lasso"])
+    p.add_argument("--model", default="naive", choices=["naive", "lasso", "ridge", "ols"])
     p.add_argument("--target-transform", default="asinh", choices=["asinh", "identity"])
     p.add_argument("--study", default="adhoc", help="MLflow tag: logical study grouping.")
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
@@ -51,7 +56,9 @@ def main() -> None:
 
     if args.model == "naive":
         refit_every = args.refit_every if args.refit_every is not None else 1
-        model: SimilarDayNaive | LassoForecaster = SimilarDayNaive()
+        model: SimilarDayNaive | LassoForecaster | RidgeForecaster | OLSForecaster = (
+            SimilarDayNaive()
+        )
         index = pd.DatetimeIndex(price.index)
         y = price
         x = None
@@ -76,21 +83,29 @@ def main() -> None:
         y = price.reindex(features.index)
         x = features
         index = pd.DatetimeIndex(features.index)
-        model = LassoForecaster(
-            target_transform=args.target_transform,
-            cv_splits=args.cv_splits,
-            n_jobs=args.n_jobs,
-        )
-        run_name = f"lasso_{args.target_transform}"
-        out = args.out or Path("data/processed/backtest_lasso.parquet")
+        if args.model == "lasso":
+            model = LassoForecaster(
+                target_transform=args.target_transform,
+                cv_splits=args.cv_splits,
+                n_jobs=args.n_jobs,
+            )
+            extra_params: dict[str, object] = {"cv_splits": args.cv_splits}
+        elif args.model == "ridge":
+            model = RidgeForecaster(target_transform=args.target_transform)
+            extra_params = {}
+        else:  # ols
+            model = OLSForecaster(target_transform=args.target_transform)
+            extra_params = {}
+        run_name = f"{args.model}_{args.target_transform}"
+        out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
         log_params = {
-            "model": "lasso",
+            "model": args.model,
             "target_transform": args.target_transform,
             "window": args.window,
             "refit_every": refit_every,
-            "cv_splits": args.cv_splits,
             "test_start": args.test_start,
             "test_end": str(args.test_end),
+            **extra_params,
         }
         log_tags = {
             "study": args.study,

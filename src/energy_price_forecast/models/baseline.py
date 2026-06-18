@@ -3,7 +3,7 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LassoCV
+from sklearn.linear_model import LassoCV, LinearRegression, RidgeCV
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -54,42 +54,26 @@ class SimilarDayNaive:
         return pd.Series(values, index=test_index, name="y_pred")
 
 
-class LassoForecaster:
-    """Lasso baseline on the engineered feature matrix.
+class _BaseLinearForecaster:
+    """Shared fit/predict logic for linear forecasters (Lasso, Ridge, OLS).
 
-    Block-forecast (one prediction per delivery day) consistent with D3. Per
-    refit the harness calls fit(y_train, x_train); per delivery day it calls
-    predict(test_index, history=..., x_test=...).
-
-    Leakage contract (see spec section 3): imputation median, scaler statistics
-    and the cross-validated alpha are fitted on x_train ONLY. predict applies
-    the train-fitted transforms. The asinh target transform is parameter-free
-    and is inverted (sinh) before predictions are returned, so the harness and
-    the metrics module see EUR/MWh -- comparable to the naive baseline.
+    Subclasses implement _make_estimator() and call super().__init__() to
+    initialise the shared state (target_transform, _pipeline, _columns).
     """
 
-    def __init__(
-        self,
-        *,
-        target_transform: str = "asinh",
-        cv_splits: int = 5,
-        max_iter: int = 5000,
-        random_state: int = 0,
-        n_jobs: int | None = None,
-    ) -> None:
+    def __init__(self, *, target_transform: str = "asinh") -> None:
         if target_transform not in _TARGET_TRANSFORMS:
             raise ValueError(f"unknown target_transform: {target_transform!r}")
         self.target_transform = target_transform
-        self.cv_splits = cv_splits
-        self.max_iter = max_iter
-        self.random_state = random_state
-        self.n_jobs = n_jobs
         self._pipeline: Pipeline | None = None
         self._columns: pd.Index | None = None
 
+    def _make_estimator(self) -> object:
+        raise NotImplementedError
+
     def fit(self, y_train: pd.Series, x_train: pd.DataFrame | None = None) -> None:
         if x_train is None:
-            raise ValueError("LassoForecaster requires a feature matrix (x_train)")
+            raise ValueError(f"{type(self).__name__} requires a feature matrix (x_train)")
         mask = y_train.notna()
         x = x_train.loc[mask]
         y = y_train.loc[mask]
@@ -97,12 +81,7 @@ class LassoForecaster:
         self._pipeline = make_pipeline(
             SimpleImputer(strategy="median", keep_empty_features=True),
             StandardScaler(),
-            LassoCV(
-                cv=TimeSeriesSplit(n_splits=self.cv_splits),
-                max_iter=self.max_iter,
-                random_state=self.random_state,
-                n_jobs=self.n_jobs,
-            ),
+            self._make_estimator(),
         )
         forward, _ = _TARGET_TRANSFORMS[self.target_transform]
         self._pipeline.fit(x.to_numpy(), forward(y.to_numpy()))
@@ -117,9 +96,72 @@ class LassoForecaster:
         if self._pipeline is None or self._columns is None:
             raise RuntimeError("predict called before fit")
         if x_test is None:
-            raise ValueError("LassoForecaster requires a feature matrix (x_test)")
+            raise ValueError(f"{type(self).__name__} requires a feature matrix (x_test)")
         x = x_test.reindex(columns=self._columns)
         _, inverse = _TARGET_TRANSFORMS[self.target_transform]
         return pd.Series(
             inverse(self._pipeline.predict(x.to_numpy())), index=test_index, name="y_pred"
         )
+
+
+class LassoForecaster(_BaseLinearForecaster):
+    """Lasso (L1) baseline: SimpleImputer → StandardScaler → LassoCV.
+
+    Alpha selected via TimeSeriesSplit cross-validation on training data only.
+    """
+
+    def __init__(
+        self,
+        *,
+        target_transform: str = "asinh",
+        cv_splits: int = 5,
+        max_iter: int = 5000,
+        random_state: int = 0,
+        n_jobs: int | None = None,
+    ) -> None:
+        super().__init__(target_transform=target_transform)
+        self.cv_splits = cv_splits
+        self.max_iter = max_iter
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+
+    def _make_estimator(self) -> LassoCV:
+        return LassoCV(
+            cv=TimeSeriesSplit(n_splits=self.cv_splits),
+            max_iter=self.max_iter,
+            random_state=self.random_state,
+            n_jobs=self.n_jobs,
+        )
+
+
+class RidgeForecaster(_BaseLinearForecaster):
+    """Ridge (L2) baseline: SimpleImputer → StandardScaler → RidgeCV.
+
+    Alpha selected via efficient leave-one-out CV (no TimeSeriesSplit needed;
+    RidgeCV uses the full analytical solution per alpha candidate).
+    """
+
+    def __init__(
+        self,
+        *,
+        target_transform: str = "asinh",
+        alphas: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0, 100.0, 1000.0),
+    ) -> None:
+        super().__init__(target_transform=target_transform)
+        self.alphas = alphas
+
+    def _make_estimator(self) -> RidgeCV:
+        return RidgeCV(alphas=self.alphas)
+
+
+class OLSForecaster(_BaseLinearForecaster):
+    """OLS baseline: SimpleImputer → StandardScaler → LinearRegression.
+
+    No regularisation; included to show how much L1/L2 shrinkage matters.
+    """
+
+    def __init__(self, *, target_transform: str = "asinh") -> None:
+        super().__init__(target_transform=target_transform)
+
+    def _make_estimator(self) -> LinearRegression:
+        return LinearRegression()

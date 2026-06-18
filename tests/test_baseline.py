@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_price_forecast.models.baseline import LassoForecaster
+from energy_price_forecast.models.baseline import LassoForecaster, OLSForecaster, RidgeForecaster
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -233,3 +233,34 @@ def test_asinh_regression_matches_default() -> None:
     p_explicit = m_explicit.predict(test_idx, history=y_train, x_test=x_test)
 
     pd.testing.assert_series_equal(p_default, p_explicit)
+
+
+# ---------------------------------------------------------------------------
+# Smoke tests: RidgeForecaster and OLSForecaster
+# ---------------------------------------------------------------------------
+
+
+def test_ridge_forecaster_smoke() -> None:
+    y_train, x_train, test_idx, x_test = _make_xy()
+    model = RidgeForecaster()
+    model.fit(y_train, x_train)
+    result = model.predict(test_idx, history=y_train, x_test=x_test)
+
+    assert isinstance(result, pd.Series)
+    assert result.name == "y_pred"
+    assert len(result) == len(test_idx)
+    assert result.notna().all()
+    assert result.abs().mean() > 5.0
+
+
+def test_ols_forecaster_smoke() -> None:
+    y_train, x_train, test_idx, x_test = _make_xy()
+    model = OLSForecaster()
+    model.fit(y_train, x_train)
+    result = model.predict(test_idx, history=y_train, x_test=x_test)
+
+    assert isinstance(result, pd.Series)
+    assert result.name == "y_pred"
+    assert len(result) == len(test_idx)
+    assert result.notna().all()
+    assert result.abs().mean() > 5.0
