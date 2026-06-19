@@ -1,4 +1,4 @@
-"""Walk-forward backtest for SimilarDayNaive or LassoForecaster; logs to MLflow."""
+"""Walk-forward backtest for baseline or LightGBM forecasters; logs to MLflow."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import mlflow
 import pandas as pd
 
 from energy_price_forecast.data.loaders import load_interim_hourly, load_processed_features
-from energy_price_forecast.evaluation.config import EXPERIMENT_NAME
-from energy_price_forecast.evaluation.metrics import summarise
+from energy_price_forecast.evaluation.config import EXPERIMENT_NAME, SPRINT3_EXPERIMENT_NAME
+from energy_price_forecast.evaluation.metrics import pinball, summarise
 from energy_price_forecast.evaluation.walkforward import run_backtest, walk_forward_splits
 from energy_price_forecast.models.baseline import (
     LassoForecaster,
@@ -18,6 +18,7 @@ from energy_price_forecast.models.baseline import (
     RidgeForecaster,
     SimilarDayNaive,
 )
+from energy_price_forecast.models.lgbm import _DEFAULT_PARAMS, LGBMForecaster
 
 
 def _fingerprint(df: pd.DataFrame) -> str:
@@ -26,7 +27,14 @@ def _fingerprint(df: pd.DataFrame) -> str:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Walk-forward backtest (naive or lasso).")
-    p.add_argument("--model", default="naive", choices=["naive", "lasso", "ridge", "ols"])
+    p.add_argument("--model", default="naive", choices=["naive", "lasso", "ridge", "ols", "lgbm"])
+    p.add_argument(
+        "--alpha",
+        type=float,
+        default=0.5,
+        help="Quantile level for LightGBM (ignored for other models).",
+    )
+    p.add_argument("--random-state", type=int, default=0, help="Random seed for LightGBM.")
     p.add_argument("--target-transform", default="asinh", choices=["asinh", "identity"])
     p.add_argument("--study", default="adhoc", help="MLflow tag: logical study grouping.")
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
@@ -54,11 +62,14 @@ def main() -> None:
     df = load_interim_hourly(args.data_path) if args.data_path else load_interim_hourly()
     price: pd.Series = df["day_ahead_price"].rename("day_ahead_price")
 
+    experiment_name = EXPERIMENT_NAME
+    extra_metrics: dict[str, float] = {}
+
     if args.model == "naive":
         refit_every = args.refit_every if args.refit_every is not None else 1
-        model: SimilarDayNaive | LassoForecaster | RidgeForecaster | OLSForecaster = (
-            SimilarDayNaive()
-        )
+        model: (
+            SimilarDayNaive | LassoForecaster | RidgeForecaster | OLSForecaster | LGBMForecaster
+        ) = SimilarDayNaive()
         index = pd.DatetimeIndex(price.index)
         y = price
         x = None
@@ -90,17 +101,33 @@ def main() -> None:
                 n_jobs=args.n_jobs,
             )
             extra_params: dict[str, object] = {"cv_splits": args.cv_splits}
+            run_name = f"{args.model}_{args.target_transform}"
         elif args.model == "ridge":
             model = RidgeForecaster(target_transform=args.target_transform)
             extra_params = {}
-        else:  # ols
+            run_name = f"{args.model}_{args.target_transform}"
+        elif args.model == "ols":
             model = OLSForecaster(target_transform=args.target_transform)
             extra_params = {}
-        run_name = f"{args.model}_{args.target_transform}"
+            run_name = f"{args.model}_{args.target_transform}"
+        else:  # lgbm
+            n_jobs = args.n_jobs if args.n_jobs is not None else 1
+            model = LGBMForecaster(
+                alpha=args.alpha,
+                random_state=args.random_state,
+                n_jobs=n_jobs,
+            )
+            extra_params = {
+                "alpha": args.alpha,
+                "objective": "quantile",
+                "random_state": args.random_state,
+                **_DEFAULT_PARAMS,
+            }
+            run_name = f"lgbm_q{int(args.alpha * 100):02d}_untuned"
+            experiment_name = SPRINT3_EXPERIMENT_NAME
         out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
         log_params = {
             "model": args.model,
-            "target_transform": args.target_transform,
             "window": args.window,
             "refit_every": refit_every,
             "test_start": args.test_start,
@@ -126,19 +153,22 @@ def main() -> None:
     predictions = run_backtest(y, model, folds, refit_every=refit_every, x=x)
     summary = summarise(predictions)
 
+    if args.model == "lgbm":
+        extra_metrics["pinball_0.50"] = pinball(predictions["y_true"], predictions["y_pred"], 0.5)
+
     mlflow.set_tracking_uri("file:./mlruns")
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(experiment_name)
 
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params(log_params)
         mlflow.set_tags(log_tags)
-        mlflow.log_metrics(summary)
+        mlflow.log_metrics({**summary, **extra_metrics})
         out.parent.mkdir(parents=True, exist_ok=True)
         predictions.to_parquet(out)
         mlflow.log_artifact(str(out))
 
     print("Summary:")
-    for k, v in summary.items():
+    for k, v in {**summary, **extra_metrics}.items():
         print(f"  {k}: {v:.4f}")
 
 
