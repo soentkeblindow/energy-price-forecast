@@ -4,7 +4,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_price_forecast.evaluation.metrics import mae, rmse, summarise, wape
+from energy_price_forecast.evaluation.metrics import (
+    interval_coverage,
+    interval_width,
+    mae,
+    pinball,
+    quantile_coverage,
+    rmse,
+    summarise,
+    wape,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -161,6 +170,112 @@ def test_summarise_constant_error() -> None:
     assert result["mae_per_day_mean"] == pytest.approx(error)
     assert result["mae_per_day_std"] == pytest.approx(0.0, abs=1e-9)
     assert result["mae_per_day_p50"] == pytest.approx(error)
+
+
+# ---------------------------------------------------------------------------
+# pinball
+# ---------------------------------------------------------------------------
+
+
+def test_pinball_hand_checked_alpha09() -> None:
+    # y=[10, 10], q=[8, 12], alpha=0.9
+    # row 0: err=2 (y>=q), loss=0.9*2=1.8
+    # row 1: err=-2 (y<q),  loss=(0.9-1)*(-2)=0.2
+    # mean = 1.0
+    y = _series(10.0, 10.0)
+    q = _series(8.0, 12.0)
+    assert pinball(y, q, 0.9) == pytest.approx(1.0)
+
+
+def test_pinball_hand_checked_alpha05() -> None:
+    # alpha=0.5: loss = 0.5 * |err|; err=2 → 1.0
+    y = _series(10.0)
+    q = _series(8.0)
+    assert pinball(y, q, 0.5) == pytest.approx(1.0)
+
+
+def test_pinball_half_mae_identity() -> None:
+    rng = np.random.default_rng(42)
+    y = pd.Series(rng.normal(50, 10, 200))
+    q = pd.Series(rng.normal(50, 10, 200))
+    assert pinball(y, q, 0.5) == pytest.approx(0.5 * mae(y, q))
+
+
+def test_pinball_nan_dropped() -> None:
+    y = _series(10.0, float("nan"), 10.0)
+    q = _series(8.0, 99.0, 12.0)
+    # Only rows 0 and 2: losses 1.8 and 0.2, mean=1.0
+    assert pinball(y, q, 0.9) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# quantile_coverage
+# ---------------------------------------------------------------------------
+
+
+def test_quantile_coverage_known_value() -> None:
+    # values 1–8 are <= 8; 9 and 10 are not → coverage = 0.8
+    y = pd.Series([float(i) for i in range(1, 11)])
+    q = pd.Series([8.0] * 10)
+    assert quantile_coverage(y, q) == pytest.approx(0.8)
+
+
+def test_quantile_coverage_nan_dropped() -> None:
+    y = _series(1.0, float("nan"), 3.0)
+    q = _series(2.0, 99.0, 2.0)
+    # Row 0: 1<=2 True; Row 2: 3<=2 False → 0.5
+    assert quantile_coverage(y, q) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# interval_coverage
+# ---------------------------------------------------------------------------
+
+
+def test_interval_coverage_known_value() -> None:
+    # values 0–8 inside [−0.5, 8.5], value 9 outside → coverage = 0.9
+    y = pd.Series([float(i) for i in range(10)])
+    lo = pd.Series([-0.5] * 10)
+    hi = pd.Series([8.5] * 10)
+    assert interval_coverage(y, lo, hi) == pytest.approx(0.9)
+
+
+def test_interval_coverage_boundary_inclusive() -> None:
+    y = _series(1.0, 5.0, 10.0)
+    lo = _series(1.0, 4.0, 9.0)
+    hi = _series(2.0, 5.0, 11.0)
+    assert interval_coverage(y, lo, hi) == pytest.approx(1.0)
+
+
+def test_interval_coverage_nan_dropped() -> None:
+    y = _series(5.0, float("nan"), 5.0)
+    lo = _series(0.0, 0.0, 10.0)
+    hi = _series(10.0, 10.0, 20.0)
+    # Row 0: 0<=5<=10 True; Row 1: NaN dropped; Row 2: 10<=5? False → 0.5
+    assert interval_coverage(y, lo, hi) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# interval_width
+# ---------------------------------------------------------------------------
+
+
+def test_interval_width_known_value() -> None:
+    lo = _series(1.0, 2.0)
+    hi = _series(4.0, 5.0)
+    assert interval_width(lo, hi) == pytest.approx(3.0)
+
+
+def test_interval_width_nan_dropped() -> None:
+    lo = _series(1.0, float("nan"), 2.0)
+    hi = _series(4.0, 99.0, 5.0)
+    # Only rows 0 and 2: widths 3.0 and 3.0 → 3.0
+    assert interval_width(lo, hi) == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# summarise
+# ---------------------------------------------------------------------------
 
 
 def test_summarise_nan_pairs_excluded() -> None:
