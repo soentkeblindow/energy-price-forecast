@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -6,6 +7,8 @@ import numpy as np
 import pandas as pd
 
 from ..market_time import GATE_CLOSURE_LOCAL_HOUR, LOCAL_TZ
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -126,8 +129,27 @@ def run_backtest(
     inputs. Fold 0 always triggers a fit. Returns a tidy frame indexed by the
     UTC test timestamps with columns [y_true, y_pred, delivery_day].
     """
+    fold_list = list(folds)
+    n_folds = len(fold_list)
     records: list[pd.DataFrame] = []
-    for i, fold in enumerate(folds):
+    for i, fold in enumerate(fold_list):
+        n_train_days = len(fold.train_index) // 24
+        if i % refit_every == 0:
+            logger.info(
+                "fold %d/%d %s: fitting on %d train days",
+                i + 1,
+                n_folds,
+                fold.delivery_day.date(),
+                n_train_days,
+            )
+        else:
+            logger.info(
+                "fold %d/%d %s: predicting (%d train days, no refit)",
+                i + 1,
+                n_folds,
+                fold.delivery_day.date(),
+                n_train_days,
+            )
         history = y.loc[fold.train_index]
         if i % refit_every == 0:
             x_train = x.loc[fold.train_index] if x is not None else None

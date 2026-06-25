@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import logging
+import time
 from pathlib import Path
 
 import mlflow
@@ -53,10 +56,27 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--features-path", default=None, type=Path)
     p.add_argument("--data-path", default=None, type=Path)
     p.add_argument("--out", default=None, type=Path)
+    p.add_argument(
+        "--params-path",
+        default=None,
+        type=Path,
+        help="Path to a frozen params JSON produced by scripts/tune.py. "
+        "When set, injects the tuned params into LGBMForecaster and uses the "
+        "'tuned' run-name variant.",
+    )
+    p.add_argument(
+        "--tuned-from",
+        default="",
+        help="MLflow run ID of the tune.py run that produced --params-path "
+        "(logged as tag tuned_from for lineage tracking).",
+    )
     return p.parse_args()
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    log = logging.getLogger(__name__)
+    t0 = time.monotonic()
     args = _parse_args()
 
     df = load_interim_hourly(args.data_path) if args.data_path else load_interim_hourly()
@@ -112,8 +132,20 @@ def main() -> None:
             run_name = f"{args.model}_{args.target_transform}"
         else:  # lgbm
             n_jobs = args.n_jobs if args.n_jobs is not None else 1
+            frozen_params: dict[str, object] | None = None
+            if args.params_path is not None:
+                raw = json.loads(Path(args.params_path).read_text())
+                frozen_params = raw["params"]
+                log.info(
+                    "loaded frozen params from %s (n_estimators=%s)",
+                    args.params_path,
+                    frozen_params.get("n_estimators"),
+                )
+            tuned = frozen_params is not None
+            log.info("initialising LGBMForecaster (alpha=%.2f, tuned=%s)", args.alpha, tuned)
             model = LGBMForecaster(
                 alpha=args.alpha,
+                params=frozen_params,  # None → uses _DEFAULT_PARAMS inside LGBMForecaster
                 random_state=args.random_state,
                 n_jobs=n_jobs,
             )
@@ -121,9 +153,9 @@ def main() -> None:
                 "alpha": args.alpha,
                 "objective": "quantile",
                 "random_state": args.random_state,
-                **_DEFAULT_PARAMS,
+                **(frozen_params if frozen_params is not None else _DEFAULT_PARAMS),
             }
-            run_name = f"lgbm_q{int(args.alpha * 100):02d}_untuned"
+            run_name = f"lgbm_q{int(args.alpha * 100):02d}_{'tuned' if tuned else 'untuned'}"
             experiment_name = SPRINT3_EXPERIMENT_NAME
         out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
         log_params = {
@@ -138,6 +170,7 @@ def main() -> None:
             "study": args.study,
             "note": args.note,
             "features_fingerprint": _fingerprint(features),
+            "tuned_from": args.tuned_from,
         }
 
     folds = list(
@@ -167,6 +200,9 @@ def main() -> None:
         predictions.to_parquet(out)
         mlflow.log_artifact(str(out))
 
+    elapsed = time.monotonic() - t0
+    mae_val = summary.get("mae", float("nan"))
+    log.info("backtest finished in %.0fs (MAE=%.4f)", elapsed, mae_val)
     print("Summary:")
     for k, v in {**summary, **extra_metrics}.items():
         print(f"  {k}: {v:.4f}")
