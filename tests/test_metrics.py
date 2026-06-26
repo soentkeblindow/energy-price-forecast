@@ -10,8 +10,10 @@ from energy_price_forecast.evaluation.metrics import (
     mae,
     pinball,
     quantile_coverage,
+    quantile_crossing_rate,
     rmse,
     summarise,
+    summarise_quantiles,
     wape,
 )
 
@@ -286,3 +288,115 @@ def test_summarise_nan_pairs_excluded() -> None:
     # Remaining rows still have constant error 2.0; metrics must stay finite
     assert math.isfinite(result["mae"])
     assert result["mae"] == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# quantile_crossing_rate
+# ---------------------------------------------------------------------------
+
+
+def test_quantile_crossing_rate_hand_checked() -> None:
+    # 10 hours; hour 0+1: q05 > q50 (low_above_mid); hour 2: q50 > q95 (mid_above_high)
+    # crossing_low_above_mid  = 2/10 = 0.2
+    # crossing_mid_above_high = 1/10 = 0.1
+    # crossing_rate           = 3/10 = 0.3  (hours 0,1,2 each violate once)
+    q_low = _series(5.0, 5.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    q_mid = _series(3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0)
+    q_hi = _series(8.0, 8.0, 2.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0)
+    result = quantile_crossing_rate(q_low, q_mid, q_hi)
+    assert result["crossing_low_above_mid"] == pytest.approx(0.2)
+    assert result["crossing_mid_above_high"] == pytest.approx(0.1)
+    assert result["crossing_rate"] == pytest.approx(0.3)
+
+
+def test_quantile_crossing_rate_double_crossing_counted_once() -> None:
+    # Hour 0: q_low > q_mid AND q_mid > q_high — both components fire, but
+    # crossing_rate counts the hour only once (OR, not sum).
+    q_low = _series(10.0, 1.0)
+    q_mid = _series(5.0, 3.0)
+    q_hi = _series(2.0, 8.0)
+    result = quantile_crossing_rate(q_low, q_mid, q_hi)
+    assert result["crossing_low_above_mid"] == pytest.approx(0.5)
+    assert result["crossing_mid_above_high"] == pytest.approx(0.5)
+    assert result["crossing_rate"] == pytest.approx(0.5)  # not 1.0
+
+
+def test_quantile_crossing_rate_perfect_order() -> None:
+    q_low = _series(1.0, 2.0, 3.0)
+    q_mid = _series(2.0, 3.0, 4.0)
+    q_hi = _series(3.0, 4.0, 5.0)
+    result = quantile_crossing_rate(q_low, q_mid, q_hi)
+    assert result["crossing_rate"] == pytest.approx(0.0)
+    assert result["crossing_low_above_mid"] == pytest.approx(0.0)
+    assert result["crossing_mid_above_high"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# summarise_quantiles
+# ---------------------------------------------------------------------------
+
+
+def test_summarise_quantiles_hand_checked() -> None:
+    # 10 observations: y_true = 5.0, q05 = 3.0, q50 = 5.0, q95 = 8.0
+    # pinball_0.50 = 0.5 * MAE = 0.5 * 0.0 = 0.0
+    # pinball_0.05: err = 5-3 = 2 (y>=q), loss = 0.05*2 = 0.1 per row
+    # pinball_0.95: err = 5-8 = -3 (y<q), loss = (0.95-1)*(-3) = 0.15 per row
+    # coverage_0.05 = P(y<=3) = 0.0
+    # coverage_0.50 = P(y<=5) = 1.0
+    # coverage_0.95 = P(y<=8) = 1.0
+    # interval_coverage_90 = P(3<=y<=8) = 1.0
+    # interval_width_90 = mean(8-3) = 5.0
+    n = 10
+    idx = pd.date_range("2021-01-01", periods=n, freq="h", tz="UTC")
+    y = pd.Series([5.0] * n, index=idx)
+    q05 = pd.Series([3.0] * n, index=idx)
+    q50 = pd.Series([5.0] * n, index=idx)
+    q95 = pd.Series([8.0] * n, index=idx)
+
+    result = summarise_quantiles(y, {0.05: q05, 0.5: q50, 0.95: q95})
+
+    assert result["pinball_0.50"] == pytest.approx(0.0)
+    assert result["pinball_0.05"] == pytest.approx(0.1)
+    assert result["pinball_0.95"] == pytest.approx(0.15)
+    assert result["coverage_0.05"] == pytest.approx(0.0)
+    assert result["coverage_0.50"] == pytest.approx(1.0)
+    assert result["coverage_0.95"] == pytest.approx(1.0)
+    assert result["interval_coverage_90"] == pytest.approx(1.0)
+    assert result["interval_width_90"] == pytest.approx(5.0)
+    assert result["crossing_rate"] == pytest.approx(0.0)
+    assert "pinball_mean" not in result  # no single-number headline (decision 6)
+
+
+def test_summarise_quantiles_nan_excluded() -> None:
+    idx = pd.date_range("2021-01-01", periods=4, freq="h", tz="UTC")
+    y = pd.Series([5.0, float("nan"), 5.0, 5.0], index=idx)
+    q50 = pd.Series([5.0, 5.0, float("nan"), 5.0], index=idx)
+    q05 = pd.Series([3.0] * 4, index=idx)
+    q95 = pd.Series([8.0] * 4, index=idx)
+
+    result = summarise_quantiles(y, {0.05: q05, 0.5: q50, 0.95: q95})
+    assert math.isfinite(result["pinball_0.50"])
+    assert math.isfinite(result["interval_coverage_90"])
+
+
+def test_summarise_quantiles_key_stability() -> None:
+    idx = pd.date_range("2021-01-01", periods=3, freq="h", tz="UTC")
+    y = pd.Series([5.0] * 3, index=idx)
+    q = pd.Series([5.0] * 3, index=idx)
+
+    result = summarise_quantiles(y, {0.05: q, 0.5: q, 0.95: q})
+
+    expected_keys = {
+        "pinball_0.05",
+        "pinball_0.50",
+        "pinball_0.95",
+        "coverage_0.05",
+        "coverage_0.50",
+        "coverage_0.95",
+        "interval_coverage_90",
+        "interval_width_90",
+        "crossing_rate",
+        "crossing_low_above_mid",
+        "crossing_mid_above_high",
+    }
+    assert set(result.keys()) == expected_keys

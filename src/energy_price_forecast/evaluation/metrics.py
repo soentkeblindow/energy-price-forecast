@@ -87,6 +87,60 @@ def interval_width(lower: pd.Series, upper: pd.Series) -> float:
     return float((hi - lo).mean())
 
 
+def quantile_crossing_rate(
+    q_low: pd.Series, q_mid: pd.Series, q_high: pd.Series
+) -> dict[str, float]:
+    """Fraction of timestamps where the ordering q_low <= q_mid <= q_high breaks.
+
+    A pure diagnostic (decision 3): crossings are reported, never corrected. The
+    three quantile models share identical (untuned) hyperparameters but are fitted
+    independently per alpha, so a small, stable crossing rate is expected. Returns
+    the overall violation rate plus its two components, so the caller can see WHERE
+    it crosses. Each sample where BOTH q_low > q_mid AND q_mid > q_high holds is
+    counted ONCE in crossing_rate (OR, not double-counted).
+    """
+    lo, mid, hi = _aligned3(q_low, q_mid, q_high)
+    low_above_mid = lo > mid
+    mid_above_high = mid > hi
+    any_violation = low_above_mid | mid_above_high
+    return {
+        "crossing_rate": float(any_violation.mean()),
+        "crossing_low_above_mid": float(low_above_mid.mean()),
+        "crossing_mid_above_high": float(mid_above_high.mean()),
+    }
+
+
+def summarise_quantiles(
+    y_true: pd.Series,
+    preds: dict[float, pd.Series],
+    *,
+    levels: tuple[float, float, float] = (0.05, 0.5, 0.95),
+) -> dict[str, float]:
+    """Consolidate three quantile forecasts into the decision-6 KPIs.
+
+    `preds` maps each alpha level to its prediction series (one per backtest run).
+    Per the no-single-headline rule (decision 6) each metric is returned SEPARATELY
+    per level / band, never averaged into a one-number score:
+      - pinball_{a:.2f}      : shared probabilistic score at level a
+      - coverage_{a:.2f}     : P(y_true <= q_a); well-calibrated ~ a
+      - interval_coverage_90 : P(q_low <= y_true <= q_high); target ~ 0.90
+      - interval_width_90    : mean(q_high - q_low); sharpness (lower = sharper)
+      - crossing_rate (+ two components) : pure ordering diagnostic (decision 3)
+
+    NaN handling: each sub-metric drops its own NaN pairs independently via
+    _aligned / _aligned3, so sample sizes may differ slightly across metrics.
+    """
+    low, mid, high = levels
+    out: dict[str, float] = {}
+    for a in levels:
+        out[f"pinball_{a:.2f}"] = pinball(y_true, preds[a], a)
+        out[f"coverage_{a:.2f}"] = quantile_coverage(y_true, preds[a])
+    out["interval_coverage_90"] = interval_coverage(y_true, preds[low], preds[high])
+    out["interval_width_90"] = interval_width(preds[low], preds[high])
+    out.update(quantile_crossing_rate(preds[low], preds[mid], preds[high]))
+    return out
+
+
 def summarise(predictions: pd.DataFrame) -> dict[str, float]:
     """Pooled MAE/RMSE/WAPE over all test rows, plus per-delivery-day MAE
     distribution (mean/std/p05/p50/p95) as a stability read. NaN pairs dropped.

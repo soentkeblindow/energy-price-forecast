@@ -153,9 +153,10 @@ def main() -> None:
                 "alpha": args.alpha,
                 "objective": "quantile",
                 "random_state": args.random_state,
+                "n_jobs": n_jobs,
                 **(frozen_params if frozen_params is not None else _DEFAULT_PARAMS),
             }
-            run_name = f"lgbm_q{int(args.alpha * 100):02d}_{'tuned' if tuned else 'untuned'}"
+            run_name = f"lgbm_q{int(args.alpha * 100):02d}{'_tuned' if tuned else ''}"
             experiment_name = SPRINT3_EXPERIMENT_NAME
         out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
         log_params = {
