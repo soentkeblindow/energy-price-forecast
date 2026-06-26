@@ -62,6 +62,7 @@ def _small_tune_kwargs() -> dict:
         es_rounds=5,
         n_estimators_ceiling=10,
         random_state=0,
+        num_threads=1,
     )
 
 
@@ -172,7 +173,7 @@ def test_suggest_lgbm_params_values_within_bounds() -> None:
     )
     params = suggest_lgbm_params(trial)  # type: ignore[arg-type]
 
-    assert 0.01 <= params["learning_rate"] <= 0.3
+    assert 0.03 <= params["learning_rate"] <= 0.3
     assert 15 <= params["num_leaves"] <= 255
     assert 3 <= params["max_depth"] <= 12
     assert 5 <= params["min_child_samples"] <= 100
@@ -190,6 +191,24 @@ def test_study_reproducible() -> None:
     """Two runs with the same random_state produce identical best params."""
     x, y = _make_xy()
     kwargs = _small_tune_kwargs()
+
+    r1, _ = tune_lgbm(y, x, **kwargs)
+    r2, _ = tune_lgbm(y, x, **kwargs)
+
+    assert r1.params == r2.params
+    assert r1.best_value == pytest.approx(r2.best_value)
+    assert r1.n_trials_completed == r2.n_trials_completed
+
+
+def test_study_reproducible_with_multiple_threads() -> None:
+    """Two runs with num_threads=2 and the same random_state produce identical best params.
+
+    deterministic=True + force_col_wise=True guarantee bit-identical results only when
+    the thread count is fixed. This test verifies the contract holds at num_threads=2
+    (CI-safe; physical-core count does not matter because the thread count is fixed).
+    """
+    x, y = _make_xy()
+    kwargs = {**_small_tune_kwargs(), "num_threads": 2}
 
     r1, _ = tune_lgbm(y, x, **kwargs)
     r2, _ = tune_lgbm(y, x, **kwargs)
@@ -322,6 +341,7 @@ def test_freeze_n_estimators_at_most_ceiling() -> None:
         n_estimators_ceiling=ceiling,
         es_val_days=10,
         es_rounds=5,
+        num_threads=1,
     )
     assert best_iter <= ceiling
 
@@ -347,6 +367,7 @@ def test_freeze_n_estimators_fires_early_on_learnable_data() -> None:
         n_estimators_ceiling=ceiling,
         es_val_days=20,
         es_rounds=10,
+        num_threads=1,
     )
     assert best_iter < ceiling
 

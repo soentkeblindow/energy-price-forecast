@@ -30,9 +30,15 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--n-trials", type=int, default=50, help="Hard trial budget ceiling.")
     p.add_argument(
+        "--n-jobs",
+        type=int,
+        default=8,
+        help="LightGBM threads per fit (not Optuna trial parallelism — Optuna stays single-threaded).",
+    )
+    p.add_argument(
         "--patience",
         type=int,
-        default=15,
+        default=10,
         help="Stop after this many non-improving trials. Reproducible. "
         "Pass 0 to disable (runs full n_trials budget).",
     )
@@ -45,7 +51,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--inner-window-days", type=int, default=90)
     p.add_argument("--es-val-days", type=int, default=42)
     p.add_argument("--es-rounds", type=int, default=50)
-    p.add_argument("--n-estimators-ceiling", type=int, default=2000)
+    p.add_argument("--n-estimators-ceiling", type=int, default=1000)
     p.add_argument("--window", default="expanding", choices=["expanding", "rolling"])
     p.add_argument("--train-span-days", type=int, default=None)
     p.add_argument("--random-state", type=int, default=0)
@@ -103,6 +109,7 @@ def main() -> None:
         window=args.window,
         train_span_days=args.train_span_days,
         random_state=args.random_state,
+        num_threads=args.n_jobs,
     )
 
     # Persist frozen params as a self-documenting JSON artifact
@@ -147,6 +154,7 @@ def main() -> None:
                 "window": args.window,
                 "train_span_days": str(args.train_span_days),
                 "random_state": args.random_state,
+                "num_threads": args.n_jobs,
                 "n_trials_completed": result.n_trials_completed,
                 **{f"best_{k}": v for k, v in result.params.items()},
             }

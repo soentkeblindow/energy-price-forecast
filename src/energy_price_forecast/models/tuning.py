@@ -30,7 +30,7 @@ _FORECASTER_KEYS = frozenset(
 def suggest_lgbm_params(trial: optuna.Trial) -> dict[str, Any]:
     """Optuna search space for the deterministic structural hyperparameters."""
     return {
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.3, log=True),
         "num_leaves": trial.suggest_int("num_leaves", 15, 255),
         "max_depth": trial.suggest_int("max_depth", 3, 12),
         "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
@@ -94,6 +94,7 @@ def _fit_score_inner_fold(
     n_estimators_ceiling: int,
     es_val_days: int,
     es_rounds: int,
+    num_threads: int = 1,
 ) -> tuple[float, int]:
     """Fit one inner fold with early stopping, return (pinball@alpha, best_iter).
 
@@ -125,7 +126,7 @@ def _fit_score_inner_fold(
         subsample=1.0,
         colsample_bytree=1.0,
         random_state=random_state,
-        n_jobs=1,
+        n_jobs=num_threads,
         deterministic=True,
         force_col_wise=True,
         verbose=-1,
@@ -167,6 +168,7 @@ def _objective(
     n_estimators_ceiling: int,
     es_val_days: int,
     es_rounds: int,
+    num_threads: int = 1,
 ) -> float:
     """Mean inner-fold pinball@0.5 -- the value optuna minimises (decision 2)."""
     params = suggest_lgbm_params(trial)
@@ -181,6 +183,7 @@ def _objective(
             n_estimators_ceiling=n_estimators_ceiling,
             es_val_days=es_val_days,
             es_rounds=es_rounds,
+            num_threads=num_threads,
         )[0]
         for fold in inner_folds
     ]
@@ -241,6 +244,7 @@ def freeze_n_estimators(
     n_estimators_ceiling: int,
     es_val_days: int,
     es_rounds: int,
+    num_threads: int = 1,
 ) -> int:
     """Refit best_params ONCE on all pre-test data with an early-stopping tail;
     the chosen best_iteration is the frozen tree count for the outer runs.
@@ -262,6 +266,7 @@ def freeze_n_estimators(
         n_estimators_ceiling=n_estimators_ceiling,
         es_val_days=es_val_days,
         es_rounds=es_rounds,
+        num_threads=num_threads,
     )
     return best_iter
 
@@ -272,15 +277,16 @@ def tune_lgbm(
     *,
     outer_test_start: pd.Timestamp,
     n_trials: int = 50,
-    patience: int | None = 15,
+    patience: int | None = 10,
     timeout: float | None = None,
     inner_window_days: int = 90,
     es_val_days: int = 42,
     es_rounds: int = 50,
-    n_estimators_ceiling: int = 2000,
+    n_estimators_ceiling: int = 1000,
     window: Literal["expanding", "rolling"] = "expanding",
     train_span_days: int | None = None,
     random_state: int = 0,
+    num_threads: int = 8,
 ) -> tuple[TuningResult, optuna.Study]:
     """Run the optuna study on the inner walk-forward, then freeze the params.
 
@@ -332,10 +338,12 @@ def tune_lgbm(
             n_estimators_ceiling=n_estimators_ceiling,
             es_val_days=es_val_days,
             es_rounds=es_rounds,
+            num_threads=num_threads,
         ),
         n_trials=n_trials,
         timeout=timeout,
         callbacks=callbacks,
+        n_jobs=1,
     )
 
     logger.info("freezing n_estimators (refitting best params on full pre-test data)")
@@ -348,6 +356,7 @@ def tune_lgbm(
         n_estimators_ceiling=n_estimators_ceiling,
         es_val_days=es_val_days,
         es_rounds=es_rounds,
+        num_threads=num_threads,
     )
     logger.info("n_estimators frozen to %d", n_est)
 

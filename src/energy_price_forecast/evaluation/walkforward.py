@@ -131,11 +131,13 @@ def run_backtest(
     """
     fold_list = list(folds)
     n_folds = len(fold_list)
+    logger.info("starting backtest: %d folds", n_folds)
+    _milestones = {max(0, int(n_folds * p) - 1) for p in (0.25, 0.5, 0.75)} | {n_folds - 1}
     records: list[pd.DataFrame] = []
     for i, fold in enumerate(fold_list):
         n_train_days = len(fold.train_index) // 24
         if i % refit_every == 0:
-            logger.info(
+            logger.debug(
                 "fold %d/%d %s: fitting on %d train days",
                 i + 1,
                 n_folds,
@@ -143,12 +145,19 @@ def run_backtest(
                 n_train_days,
             )
         else:
-            logger.info(
+            logger.debug(
                 "fold %d/%d %s: predicting (%d train days, no refit)",
                 i + 1,
                 n_folds,
                 fold.delivery_day.date(),
                 n_train_days,
+            )
+        if i in _milestones:
+            logger.info(
+                "backtest progress: %d/%d folds (%.0f%%)",
+                i + 1,
+                n_folds,
+                100 * (i + 1) / n_folds,
             )
         history = y.loc[fold.train_index]
         if i % refit_every == 0:
