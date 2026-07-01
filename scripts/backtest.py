@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Literal
 
 import mlflow
 import pandas as pd
@@ -15,6 +16,11 @@ from energy_price_forecast.data.loaders import load_interim_hourly, load_process
 from energy_price_forecast.evaluation.config import EXPERIMENT_NAME, SPRINT3_EXPERIMENT_NAME
 from energy_price_forecast.evaluation.metrics import pinball, summarise
 from energy_price_forecast.evaluation.walkforward import run_backtest, walk_forward_splits
+from energy_price_forecast.models.arimax import (
+    ARIMAX_EXOG_COLUMNS,
+    ARIMAXForecaster,
+    select_arimax_exog,
+)
 from energy_price_forecast.models.baseline import (
     LassoForecaster,
     OLSForecaster,
@@ -24,13 +30,33 @@ from energy_price_forecast.models.baseline import (
 from energy_price_forecast.models.lgbm import _DEFAULT_PARAMS, LGBMForecaster
 
 
+def _resolve_window(window_arg: str | None, model: str) -> Literal["expanding", "rolling"]:
+    """Return the effective window type, applying per-model defaults."""
+    if window_arg == "rolling":
+        return "rolling"
+    if window_arg == "expanding":
+        return "expanding"
+    return "rolling" if model == "arimax" else "expanding"
+
+
+def _parse_order(s: str) -> tuple[int, int, int]:
+    """Parse '2,0,1' into (2, 0, 1) for ARIMA order."""
+    parts = [p.strip() for p in s.split(",")]
+    if len(parts) != 3:
+        raise ValueError(f"--arima-order must be p,d,q (got '{s}')")
+    p, d, q = (int(x) for x in parts)
+    return p, d, q
+
+
 def _fingerprint(df: pd.DataFrame) -> str:
     return f"{df.index.min()}_{df.index.max()}_{df.shape}"
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Walk-forward backtest (naive or lasso).")
-    p.add_argument("--model", default="naive", choices=["naive", "lasso", "ridge", "ols", "lgbm"])
+    p.add_argument(
+        "--model", default="naive", choices=["naive", "lasso", "ridge", "ols", "lgbm", "arimax"]
+    )
     p.add_argument(
         "--alpha",
         type=float,
@@ -43,7 +69,17 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
     p.add_argument("--test-start", default="2021-01-01")
     p.add_argument("--test-end", default=None)
-    p.add_argument("--window", default="expanding", choices=["expanding", "rolling"])
+    p.add_argument(
+        "--window",
+        default=None,
+        choices=["expanding", "rolling"],
+        help="Walk-forward window type. Default: 'rolling' for arimax, 'expanding' for others.",
+    )
+    p.add_argument(
+        "--arima-order",
+        default="2,0,0",
+        help="ARIMA order as p,d,q for --model arimax (default: 2,0,0).",
+    )
     p.add_argument("--train-span-days", type=int, default=None)
     p.add_argument(
         "--refit-every",
@@ -79,6 +115,14 @@ def main() -> None:
     t0 = time.monotonic()
     args = _parse_args()
 
+    # Resolve per-model window defaults (arimax defaults to rolling/90; others to expanding).
+    _window = _resolve_window(args.window, args.model)
+    _train_span_days: int | None = (
+        args.train_span_days
+        if args.train_span_days is not None
+        else (90 if args.model == "arimax" else None)
+    )
+
     df = load_interim_hourly(args.data_path) if args.data_path else load_interim_hourly()
     price: pd.Series = df["day_ahead_price"].rename("day_ahead_price")
 
@@ -88,7 +132,12 @@ def main() -> None:
     if args.model == "naive":
         refit_every = args.refit_every if args.refit_every is not None else 1
         model: (
-            SimilarDayNaive | LassoForecaster | RidgeForecaster | OLSForecaster | LGBMForecaster
+            SimilarDayNaive
+            | LassoForecaster
+            | RidgeForecaster
+            | OLSForecaster
+            | LGBMForecaster
+            | ARIMAXForecaster
         ) = SimilarDayNaive()
         index = pd.DatetimeIndex(price.index)
         y = price
@@ -98,7 +147,7 @@ def main() -> None:
         log_params: dict[str, object] = {
             "model": "similarday_naive",
             "target_transform": "none",
-            "window": args.window,
+            "window": _window,
             "refit_every": refit_every,
             "test_start": args.test_start,
             "test_end": str(args.test_end),
@@ -130,6 +179,22 @@ def main() -> None:
             model = OLSForecaster(target_transform=args.target_transform)
             extra_params = {}
             run_name = f"{args.model}_{args.target_transform}"
+        elif args.model == "arimax":
+            x = select_arimax_exog(features)
+            order = _parse_order(args.arima_order)
+            model = ARIMAXForecaster(alpha=args.alpha, order=order)
+            run_name = f"arimax_q{int(args.alpha * 100):02d}"
+            experiment_name = SPRINT3_EXPERIMENT_NAME
+            extra_params = {
+                "alpha": args.alpha,
+                "order": str(model.order),
+                "fourier_daily_k": model.fourier_daily_k,
+                "fourier_weekly_k": model.fourier_weekly_k,
+                "exog_set": "|".join(ARIMAX_EXOG_COLUMNS),
+                "standardize": True,
+                "train_span_days": _train_span_days,
+                "random_state": 0,
+            }
         else:  # lgbm
             n_jobs = args.n_jobs if args.n_jobs is not None else 1
             frozen_params: dict[str, object] | None = None
@@ -158,10 +223,15 @@ def main() -> None:
             }
             run_name = f"lgbm_q{int(args.alpha * 100):02d}{'_tuned' if tuned else ''}"
             experiment_name = SPRINT3_EXPERIMENT_NAME
-        out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
+        if args.model == "arimax":
+            out = args.out or Path(
+                f"data/processed/preds_arimax_q{int(args.alpha * 100):02d}.parquet"
+            )
+        else:
+            out = args.out or Path(f"data/processed/backtest_{args.model}.parquet")
         log_params = {
             "model": args.model,
-            "window": args.window,
+            "window": _window,
             "refit_every": refit_every,
             "test_start": args.test_start,
             "test_end": str(args.test_end),
@@ -179,16 +249,18 @@ def main() -> None:
             index,
             test_start=args.test_start,
             test_end=args.test_end,
-            window=args.window,
-            train_span_days=args.train_span_days,
+            window=_window,
+            train_span_days=_train_span_days,
         )
     )
 
     predictions = run_backtest(y, model, folds, refit_every=refit_every, x=x)
     summary = summarise(predictions)
 
-    if args.model == "lgbm":
-        extra_metrics["pinball_0.50"] = pinball(predictions["y_true"], predictions["y_pred"], 0.5)
+    if args.model in ("lgbm", "arimax"):
+        extra_metrics[f"pinball_{args.alpha:.2f}"] = pinball(
+            predictions["y_true"], predictions["y_pred"], args.alpha
+        )
 
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment(experiment_name)
