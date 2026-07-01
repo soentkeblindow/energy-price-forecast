@@ -29,6 +29,11 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
     p.add_argument(
+        "--study",
+        default="lgbm_quantiles",
+        help="MLflow tag: logical study grouping (default: lgbm_quantiles).",
+    )
+    p.add_argument(
         "--random-state",
         type=int,
         default=0,
@@ -92,7 +97,8 @@ def main() -> None:
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment(SPRINT3_EXPERIMENT_NAME)
 
-    with mlflow.start_run(run_name="lgbm_quantile_calibration"):
+    run_name = f"{args.study}_calibration"
+    with mlflow.start_run(run_name=run_name):
         mlflow.log_params(
             {
                 "pred_q05": str(args.pred_q05),
@@ -104,7 +110,7 @@ def main() -> None:
                 "random_state": args.random_state,
             }
         )
-        mlflow.set_tags({"study": "lgbm_quantiles", "note": args.note})
+        mlflow.set_tags({"study": args.study, "note": args.note})
         mlflow.log_metrics(kpis)
         mlflow.log_artifact(str(args.out))
 
