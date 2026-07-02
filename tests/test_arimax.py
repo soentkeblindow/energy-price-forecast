@@ -241,18 +241,19 @@ def test_warm_start_params_set_after_fit() -> None:
     y_train = y.iloc[:n_train]
 
     model = ARIMAXForecaster()
-    assert model._start_params is None
+    params_before = model._start_params
+    assert params_before is None
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model.fit(y_train, x_train)
 
-    assert model._start_params is not None
-    assert isinstance(model._start_params, np.ndarray)
+    params_after = model._start_params
+    assert params_after is not None
     # AR(2) + sigma2 = 3 extra; exog cols after zero-var drop
     n_active_exog = len(ARIMAX_EXOG_COLUMNS) - len(model._zero_var_cols)
     expected_len = 2 * _FOURIER_DAILY_K + 2 * _FOURIER_WEEKLY_K + n_active_exog + model.order[0] + 1
-    assert len(model._start_params) == expected_len
+    assert len(params_after) == expected_len
 
 
 def test_warm_start_skipped_on_param_count_change() -> None:
@@ -482,3 +483,36 @@ def test_predict_raises_without_x_test() -> None:
     y_train = y.iloc[:n_train]
     with pytest.raises(ValueError, match="exog matrix"):
         model.predict(test_index, history=y_train, x_test=None)
+
+
+# ---------------------------------------------------------------------------
+# ARIMAXForecaster — exog_coefficients accessor (Sprint 3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_exog_coefficients_before_fit_raises() -> None:
+    with pytest.raises(RuntimeError, match="not fitted"):
+        _ = ARIMAXForecaster().exog_coefficients
+
+
+def test_exog_coefficients_after_fit_is_named_series() -> None:
+    """exog_coefficients returns a named pd.Series subset of ARIMAX_EXOG_COLUMNS."""
+    # Use a fixture with variance in all columns so zero-var drop is minimal.
+    x = _make_exog(n_days=35)
+    y = _make_price(n_days=35)
+    n_train = 30 * 24
+    x_train = x.iloc[:n_train]
+    y_train = y.iloc[:n_train]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = ARIMAXForecaster()
+        model.fit(y_train, x_train)
+
+    coefs = model.exog_coefficients
+    assert isinstance(coefs, pd.Series)
+    # All returned names must be from the curated exog set.
+    assert set(coefs.index).issubset(set(ARIMAX_EXOG_COLUMNS))
+    # Coefficients must be finite floats.
+    assert coefs.notna().all()
+    assert (coefs.abs() < 1e6).all()

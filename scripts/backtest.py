@@ -16,6 +16,7 @@ from energy_price_forecast.data.loaders import load_interim_hourly, load_process
 from energy_price_forecast.evaluation.config import EXPERIMENT_NAME, SPRINT3_EXPERIMENT_NAME
 from energy_price_forecast.evaluation.metrics import pinball, summarise
 from energy_price_forecast.evaluation.walkforward import run_backtest, walk_forward_splits
+from energy_price_forecast.features.subset import drop_features
 from energy_price_forecast.models.arimax import (
     ARIMAX_EXOG_COLUMNS,
     ARIMAXForecaster,
@@ -92,6 +93,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--features-path", default=None, type=Path)
     p.add_argument("--data-path", default=None, type=Path)
     p.add_argument("--out", default=None, type=Path)
+    p.add_argument(
+        "--drop-features",
+        default="",
+        help="Comma-separated feature columns to drop in-memory before the lgbm backtest "
+        "(ablation, step 3.5). Fails fast if any name is not found in the feature matrix.",
+    )
     p.add_argument(
         "--params-path",
         default=None,
@@ -196,6 +203,11 @@ def main() -> None:
                 "random_state": 0,
             }
         else:  # lgbm
+            drop_cols = [c.strip() for c in args.drop_features.split(",") if c.strip()]
+            if drop_cols:
+                features = drop_features(features, drop_cols, strict=True)
+                x = features
+                log.info("dropped %d features for ablation: %s", len(drop_cols), drop_cols)
             n_jobs = args.n_jobs if args.n_jobs is not None else 1
             frozen_params: dict[str, object] | None = None
             if args.params_path is not None:
@@ -219,6 +231,7 @@ def main() -> None:
                 "objective": "quantile",
                 "random_state": args.random_state,
                 "n_jobs": n_jobs,
+                "dropped_features": ",".join(drop_cols) if drop_cols else "none",
                 **(frozen_params if frozen_params is not None else _DEFAULT_PARAMS),
             }
             run_name = f"lgbm_q{int(args.alpha * 100):02d}{'_tuned' if tuned else ''}"

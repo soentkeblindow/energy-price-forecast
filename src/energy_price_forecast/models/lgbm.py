@@ -75,6 +75,18 @@ class LGBMForecaster:
         )
         self._model.fit(x, y)  # trained directly in EUR/MWh (no target transform)
 
+    @property
+    def fitted_estimator(self) -> LGBMRegressor:
+        """Return the fitted underlying LightGBM estimator (for SHAP/inspection).
+
+        Read-only accessor so downstream analysis (step 3.5 SHAP) explains exactly
+        the delivered model rather than a separately refitted one. Raises RuntimeError
+        if called before `fit`, consistent with the predict-before-fit contract.
+        """
+        if self._model is None:
+            raise RuntimeError("estimator is not fitted; call fit() first")
+        return self._model
+
     def predict(
         self,
         test_index: pd.DatetimeIndex,

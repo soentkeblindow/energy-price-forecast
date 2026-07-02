@@ -167,3 +167,27 @@ def test_alpha_direction() -> None:
     p95 = m95.predict(test_index, history=y_train, x_test=x_test)
 
     assert p95.mean() >= p05.mean()
+
+
+# ---------------------------------------------------------------------------
+# fitted_estimator accessor (Sprint 3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_fitted_estimator_before_fit_raises() -> None:
+    with pytest.raises(RuntimeError, match="not fitted"):
+        _ = LGBMForecaster().fitted_estimator
+
+
+def test_fitted_estimator_after_fit_returns_lgbm_regressor() -> None:
+    from lightgbm import LGBMRegressor
+
+    x, y = _make_xy()
+    x_train, _, y_train, _ = _split(x, y)
+    model = LGBMForecaster()
+    model.fit(y_train, x_train)
+    est = model.fitted_estimator
+    assert isinstance(est, LGBMRegressor)
+    # A fitted estimator must have booster_ and know the feature count.
+    assert hasattr(est, "booster_")
+    assert est.n_features_in_ == x_train.shape[1]

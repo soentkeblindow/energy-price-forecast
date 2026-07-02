@@ -207,6 +207,25 @@ class ARIMAXForecaster:
             {a: f"{v:.3f}" for a, v in self._offsets.items()},
         )
 
+    @property
+    def exog_coefficients(self) -> pd.Series:
+        """Return the fitted standardised exogenous coefficients (named Series).
+
+        Subsets the SARIMAX parameter vector to the curated exog columns
+        (ARIMAX_EXOG_COLUMNS) that survived the per-fit zero-variance drop. Exog are
+        z-scored at fit (decision 4), so each coefficient is in EUR/MWh per one
+        standard deviation of that regressor -- magnitudes are directly comparable
+        across regressors (e.g. gas pass-through vs. merit-order slope). A regime
+        dummy is constant within its own regime window and is therefore absent here
+        (dropped as zero-variance); that absence is expected, not an error. Raises
+        RuntimeError if called before `fit`.
+        """
+        if self._res is None:
+            raise RuntimeError("model is not fitted; call fit() first")
+        params = self._res.params
+        present = [c for c in ARIMAX_EXOG_COLUMNS if c in params.index]
+        return params.loc[present]
+
     def predict(
         self,
         test_index: pd.DatetimeIndex,
