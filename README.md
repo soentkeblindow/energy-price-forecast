@@ -35,14 +35,14 @@ All metrics on a common 2021–2025 walk-forward test set (rolling-90 day window
 
 | Model | MAE (EUR/MWh) |
 |---|---|
-| Seasonal Naive | ~24 |
+| Seasonal Naive | ~35 |
 | Lasso (expanding window) | ~24 |
 | ARIMAX rolling-90 | ~23 |
 | **LightGBM rolling-90** | **~15.4** |
 
 **Tuning finding:** Optuna-tuned LightGBM ≈ untuned across two independent runs — `_DEFAULT_PARAMS` are the de-facto baseline. The main gain came from shortening the training window (rolling-90 + daily refit), not from hyperparameter search.
 
-**Quantile calibration:** LightGBM q05–q95 bands are well-calibrated (coverage 0.17/0.81 vs target 0.05/0.95 — modest over-coverage, likely correctable). ARIMAX bands systematically under-cover (~50% for the 90% band) because empirical offsets are derived from one-step Kalman innovations, not 24h forecast errors.
+**Quantile calibration:** LightGBM q05–q95 bands are not well-calibrated (coverage 0.17/0.81 vs target 0.05/0.95). ARIMAX bands under-cover even more (~50% for the 90% band) as a contrast. Quantile kalibrating is needed.
 
 **SHAP attribution:** `residual_load_forecast` dominates LightGBM importance (mean |SHAP| 7.1 EUR/MWh), followed by seasonal features (`month_sin`) and price lags. The tree captures a non-linear merit-order effect invisible to Lasso.
 
