@@ -67,6 +67,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--random-state", type=int, default=0, help="Random seed for LightGBM.")
     p.add_argument("--target-transform", default="asinh", choices=["asinh", "identity"])
     p.add_argument("--study", default="adhoc", help="MLflow tag: logical study grouping.")
+    p.add_argument(
+        "--experiment",
+        default=None,
+        help="Override the MLflow experiment name (default: model-dependent, e.g. "
+        "'sprint3_models' for lgbm/arimax).",
+    )
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
     p.add_argument("--test-start", default="2021-01-01")
     p.add_argument("--test-end", default=None)
@@ -274,6 +280,9 @@ def main() -> None:
         extra_metrics[f"pinball_{args.alpha:.2f}"] = pinball(
             predictions["y_true"], predictions["y_pred"], args.alpha
         )
+
+    if args.experiment is not None:
+        experiment_name = args.experiment
 
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment(experiment_name)
