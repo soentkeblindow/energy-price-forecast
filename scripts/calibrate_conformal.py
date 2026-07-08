@@ -1,11 +1,16 @@
 """Apply scaled conformal recalibration to the extended quantile grid and log
-a before/after MLflow run.
+a raw / calibrated / calibrated_sorted MLflow run.
 
 Thin glue only: argparse -> load the seven parquets + target -> call
-scaled_conformal_calibrate -> before/after via the UNCHANGED 4.3a functions
-(reliability_curve, band_metrics) -> MLflow run with tables + calibrated
-parquets as artefacts. All diagnostic/calibration logic lives in
-energy_price_forecast.evaluation.conformal / .reliability.
+scaled_conformal_calibrate -> rearrange_quantiles on its output -> reliability
+via the UNCHANGED 4.3a functions (reliability_curve, band_metrics) on all
+three artifact generations -> MLflow run with tables + all three prediction
+sets as artefacts. All diagnostic/calibration/rearrangement logic lives in
+energy_price_forecast.evaluation.conformal / .rearrangement / .reliability.
+
+conformal_diagnostics.csv (crossing_rate, Q, sigma) always describes the
+UNSORTED calibrated set -- rearrangement enforces monotonicity afterwards but
+must not hide the noise signal that crossing_rate reports.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from energy_price_forecast.evaluation.config import (
     ConformalConfig,
 )
 from energy_price_forecast.evaluation.conformal import scaled_conformal_calibrate
+from energy_price_forecast.evaluation.rearrangement import rearrange_quantiles
 from energy_price_forecast.evaluation.reliability import (
     FORECAST_LEVEL_BUCKETS,
     NESTED_BANDS,
@@ -61,6 +67,10 @@ def _calibrated_path(out_dir: Path, level: float) -> Path:
     return out_dir / f"preds_lgbm_q{int(round(level * 100)):02d}_calibrated.parquet"
 
 
+def _sorted_path(out_dir: Path, level: float) -> Path:
+    return out_dir / f"preds_lgbm_q{int(round(level * 100)):02d}_calibrated_sorted.parquet"
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     log = logging.getLogger(__name__)
@@ -85,24 +95,33 @@ def main() -> None:
     calibrated, diagnostics = scaled_conformal_calibrate(
         y, preds, config=config, window_days=args.calibration_window
     )
+    calibrated_sorted = rearrange_quantiles(calibrated)
 
     reliability_raw = reliability_curve(y, preds, buckets=FORECAST_LEVEL_BUCKETS)
     reliability_calibrated = reliability_curve(y, calibrated, buckets=FORECAST_LEVEL_BUCKETS)
+    reliability_sorted = reliability_curve(y, calibrated_sorted, buckets=FORECAST_LEVEL_BUCKETS)
     bands_raw = band_metrics(y, preds, buckets=FORECAST_LEVEL_BUCKETS)
     bands_calibrated = band_metrics(y, calibrated, buckets=FORECAST_LEVEL_BUCKETS)
+    bands_sorted = band_metrics(y, calibrated_sorted, buckets=FORECAST_LEVEL_BUCKETS)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out_paths = {
         "reliability_raw": args.out_dir / "conformal_reliability_raw.csv",
         "reliability_calibrated": args.out_dir / "conformal_reliability_calibrated.csv",
+        "reliability_sorted": args.out_dir / "conformal_reliability_sorted.csv",
         "bands_raw": args.out_dir / "conformal_bands_raw.csv",
         "bands_calibrated": args.out_dir / "conformal_bands_calibrated.csv",
+        "bands_sorted": args.out_dir / "conformal_bands_sorted.csv",
         "diagnostics": args.out_dir / "conformal_diagnostics.csv",
     }
     reliability_raw.to_csv(out_paths["reliability_raw"], index=False)
     reliability_calibrated.to_csv(out_paths["reliability_calibrated"], index=False)
+    reliability_sorted.to_csv(out_paths["reliability_sorted"], index=False)
     bands_raw.to_csv(out_paths["bands_raw"], index=False)
     bands_calibrated.to_csv(out_paths["bands_calibrated"], index=False)
+    bands_sorted.to_csv(out_paths["bands_sorted"], index=False)
+    # diagnostics describes the UNSORTED calibrated set on purpose: crossing_rate
+    # is a real signal about noise in Q_alpha, not a defect rearrangement should hide.
     diagnostics.to_csv(out_paths["diagnostics"], index=False)
     for name, path in out_paths.items():
         log.info("%s written to %s", name, path)
@@ -112,8 +131,14 @@ def main() -> None:
         calibrated[a].to_frame("y_pred").to_parquet(path)
         log.info("calibrated q%.2f written to %s", a, path)
 
+    sorted_paths = {a: _sorted_path(args.out_dir, a) for a in QUANTILE_GRID}
+    for a, path in sorted_paths.items():
+        calibrated_sorted[a].to_frame("y_pred").to_parquet(path)
+        log.info("calibrated_sorted q%.2f written to %s", a, path)
+
     overall_raw = reliability_raw[reliability_raw["bucket"] == "overall"]
     overall_calibrated = reliability_calibrated[reliability_calibrated["bucket"] == "overall"]
+    overall_sorted = reliability_sorted[reliability_sorted["bucket"] == "overall"]
     metrics: dict[str, float] = {
         f"coverage_before_{level:.2f}": float(row["coverage"])
         for level, row in overall_raw.set_index("level").iterrows()
@@ -124,9 +149,16 @@ def main() -> None:
             for level, row in overall_calibrated.set_index("level").iterrows()
         }
     )
+    metrics.update(
+        {
+            f"coverage_sorted_{level:.2f}": float(row["coverage"])
+            for level, row in overall_sorted.set_index("level").iterrows()
+        }
+    )
 
     bands_raw_overall = bands_raw[bands_raw["bucket"] == "overall"]
     bands_calibrated_overall = bands_calibrated[bands_calibrated["bucket"] == "overall"]
+    bands_sorted_overall = bands_sorted[bands_sorted["bucket"] == "overall"]
     for name, _low, _high in NESTED_BANDS:
         raw_row = bands_raw_overall.loc[bands_raw_overall["band"] == name]
         if not raw_row.empty:
@@ -134,6 +166,10 @@ def main() -> None:
         calibrated_row = bands_calibrated_overall.loc[bands_calibrated_overall["band"] == name]
         if not calibrated_row.empty:
             metrics[f"interval_coverage_after_{name}"] = float(calibrated_row["coverage"].iloc[0])
+        sorted_row = bands_sorted_overall.loc[bands_sorted_overall["band"] == name]
+        if not sorted_row.empty:
+            metrics[f"interval_coverage_sorted_{name}"] = float(sorted_row["coverage"].iloc[0])
+            metrics[f"interval_width_sorted_{name}"] = float(sorted_row["width"].iloc[0])
 
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment(CALIBRATION_EXPERIMENT_NAME)
@@ -156,6 +192,8 @@ def main() -> None:
         for path in out_paths.values():
             mlflow.log_artifact(str(path))
         for path in calibrated_paths.values():
+            mlflow.log_artifact(str(path))
+        for path in sorted_paths.values():
             mlflow.log_artifact(str(path))
 
     log.info("MLflow conformal calibration run logged.")
