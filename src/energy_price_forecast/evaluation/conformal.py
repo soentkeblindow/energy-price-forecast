@@ -39,6 +39,8 @@ Two honest caveats (kept here, not just in the spec):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
@@ -136,6 +138,86 @@ def quantile_shift(
     return float(np.sort(scores.to_numpy())[rank - 1])
 
 
+@dataclass
+class _CalibrationState:
+    """One recompute day's calibration-window snapshot, internal to this module."""
+
+    cal_idx: pd.DatetimeIndex
+    cal_med: pd.Series | None
+    cal_y: pd.Series | None
+    floor: float
+    uncalibrated: bool
+    n_cal: int
+
+
+def _calibration_state(
+    day: pd.Timestamp,
+    q50: pd.Series,
+    y_true: pd.Series,
+    *,
+    config: ConformalConfig,
+    window_days: int,
+) -> _CalibrationState:
+    """Trailing calibration window + local-scale floor for one recompute day.
+
+    Single source for the window-selection/floor logic shared by
+    ``scaled_conformal_calibrate`` and ``hourly_sigma`` -- factored out so the
+    two never drift apart (Sprint 4.4a). Below ``config.min_calibration_hours``
+    usable hours, returns an uncalibrated state (``cal_med``/``cal_y`` None,
+    ``floor`` 0.0) rather than raising.
+    """
+    cal_idx = calibration_window(
+        day,
+        pd.DatetimeIndex(y_true.index),
+        window_days=window_days,
+        embargo_days=config.embargo_days,
+    )
+    n_cal = len(cal_idx)
+    if n_cal < config.min_calibration_hours:
+        return _CalibrationState(cal_idx, None, None, 0.0, True, n_cal)
+    cal_y = y_true.loc[cal_idx]
+    cal_med = q50.loc[cal_idx]
+    floor = config.sigma_floor_fraction * float(cal_y.std(ddof=1))
+    return _CalibrationState(cal_idx, cal_med, cal_y, floor, False, n_cal)
+
+
+def hourly_sigma(
+    y_true: pd.Series,
+    q50_raw: pd.Series,
+    *,
+    config: ConformalConfig,
+    window_days: int | None = None,
+) -> pd.Series:
+    """Per-hour local-scale sigma(t) over q50_raw's full index.
+
+    The SAME sigma ``scaled_conformal_calibrate`` applies to the seven
+    quantile levels -- factored out so downstream consumers (Sprint 4.4a's
+    residual pool) import it verbatim instead of re-deriving it. Recomputed
+    every ``config.recompute_cadence_days`` from a trailing calibration
+    window (``_calibration_state``); hours whose window is uncalibrated get
+    NaN, not an exception.
+    """
+    w = window_days if window_days is not None else config.window_days
+    test_index = pd.DatetimeIndex(q50_raw.index)
+    local_days = test_index.tz_convert(LOCAL_TZ).normalize()
+    delivery_days = pd.DatetimeIndex(sorted(pd.unique(local_days)))
+
+    sigma = pd.Series(float("nan"), index=test_index)
+    state: _CalibrationState | None = None
+    for day_num, day in enumerate(delivery_days):
+        if day_num % config.recompute_cadence_days == 0:
+            state = _calibration_state(day, q50_raw, y_true, config=config, window_days=w)
+        assert state is not None  # day_num == 0 always recomputes
+        mask = local_days == day
+        d_idx = test_index[mask]
+        if state.uncalibrated or state.cal_med is None or state.cal_y is None:
+            continue
+        sigma.loc[mask] = local_scale(
+            q50_raw.loc[d_idx], state.cal_med, state.cal_y, k=config.n_neighbors, floor=state.floor
+        ).to_numpy()
+    return sigma
+
+
 def scaled_conformal_calibrate(
     y_true: pd.Series,
     preds: dict[float, pd.Series],
@@ -192,7 +274,6 @@ def scaled_conformal_calibrate(
     levels = sorted(preds)
     q50 = preds[0.5]
     test_index = pd.DatetimeIndex(q50.index)
-    y_index = pd.DatetimeIndex(y_true.index)
     w = window_days if window_days is not None else config.window_days
 
     local_days = test_index.tz_convert(LOCAL_TZ).normalize()
@@ -201,44 +282,41 @@ def scaled_conformal_calibrate(
     calibrated: dict[float, pd.Series] = {a: preds[a].astype(float).copy() for a in levels}
     diagnostics_rows: list[dict[str, object]] = []
 
-    cal_med: pd.Series | None = None
-    cal_y: pd.Series | None = None
-    floor_global = 0.0
-    n_cal = 0
+    # The per-hour sigma applied below is computed once, up front, via the
+    # SAME function Sprint 4.4a imports for its residual pool (spec 3.2) --
+    # not re-derived here, so the two can never drift apart.
+    sigma_series = hourly_sigma(y_true, q50, config=config, window_days=w)
+
+    state: _CalibrationState | None = None
     shifts: dict[float, float] = dict.fromkeys(levels, float("nan"))
-    uncalibrated = True
 
     for day_num, day in enumerate(delivery_days):
         if day_num % config.recompute_cadence_days == 0:
-            cal_idx = calibration_window(
-                day, y_index, window_days=w, embargo_days=config.embargo_days
-            )
-            n_cal = len(cal_idx)
-            if n_cal < config.min_calibration_hours:
-                uncalibrated = True
-                cal_med = cal_y = None
-                floor_global = 0.0
+            state = _calibration_state(day, q50, y_true, config=config, window_days=w)
+            if state.uncalibrated or state.cal_med is None or state.cal_y is None:
                 shifts = dict.fromkeys(levels, float("nan"))
             else:
-                cal_y = y_true.loc[cal_idx]
-                cal_med = q50.loc[cal_idx]
-                floor_global = config.sigma_floor_fraction * float(cal_y.std(ddof=1))
+                # cal_sigma is a SEPARATE query of local_scale -- sigma AT the
+                # calibration hours themselves (self-referential), used only
+                # to normalize the quantile_shift scores. Not the same
+                # quantity as sigma_series, which is queried at test hours.
                 cal_sigma = local_scale(
-                    cal_med, cal_med, cal_y, k=config.n_neighbors, floor=floor_global
+                    state.cal_med,
+                    state.cal_med,
+                    state.cal_y,
+                    k=config.n_neighbors,
+                    floor=state.floor,
                 )
                 shifts = {
-                    a: quantile_shift(cal_y, preds[a].loc[cal_idx], cal_sigma, a) for a in levels
+                    a: quantile_shift(state.cal_y, preds[a].loc[state.cal_idx], cal_sigma, a)
+                    for a in levels
                 }
-                uncalibrated = False
+        assert state is not None  # day_num == 0 always recomputes
 
         d_idx = test_index[local_days == day]
+        sigma_day = sigma_series.loc[d_idx]
 
-        if uncalibrated or cal_med is None or cal_y is None:
-            sigma_day = pd.Series(float("nan"), index=d_idx)
-        else:
-            sigma_day = local_scale(
-                q50.loc[d_idx], cal_med, cal_y, k=config.n_neighbors, floor=floor_global
-            )
+        if not state.uncalibrated:
             for a in levels:
                 calibrated[a].loc[d_idx] = preds[a].loc[d_idx] + shifts[a] * sigma_day
 
@@ -256,9 +334,9 @@ def scaled_conformal_calibrate(
                     "day": day,
                     "level": a,
                     "Q": shifts[a],
-                    "n": n_cal,
+                    "n": state.n_cal,
                     "sigma": mean_sigma,
-                    "uncalibrated": uncalibrated,
+                    "uncalibrated": state.uncalibrated,
                     "crossing_rate": crossing_rate,
                 }
             )

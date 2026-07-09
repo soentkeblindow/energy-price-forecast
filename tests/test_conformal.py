@@ -5,6 +5,7 @@ import pytest
 from energy_price_forecast.evaluation.config import ConformalConfig
 from energy_price_forecast.evaluation.conformal import (
     calibration_window,
+    hourly_sigma,
     local_scale,
     quantile_shift,
     scaled_conformal_calibrate,
@@ -404,3 +405,71 @@ def test_missing_median_level_raises() -> None:
 
     with pytest.raises(ValueError, match="0.5"):
         scaled_conformal_calibrate(y, preds, config=config)
+
+
+# ---------------------------------------------------------------------------
+# hourly_sigma: extracted so Sprint 4.4a imports it verbatim (spec 3.2)
+# ---------------------------------------------------------------------------
+
+
+def test_hourly_sigma_matches_scaled_conformal_calibrate_diagnostics() -> None:
+    """Equivalence proof: hourly_sigma is not a parallel re-derivation of sigma."""
+    index = _hourly_utc("2021-01-01", 24 * 30)
+    rng = np.random.default_rng(5)
+    y = pd.Series(50 + rng.normal(0, 5, len(index)), index=index)
+    preds = {
+        0.05: pd.Series(40.0, index=index),
+        0.50: pd.Series(50.0, index=index),
+        0.95: pd.Series(60.0, index=index),
+    }
+    config = ConformalConfig(
+        window_days=5,
+        embargo_days=1,
+        n_neighbors=50,
+        sigma_floor_fraction=0.10,
+        recompute_cadence_days=3,
+        min_calibration_hours=24,
+    )
+
+    _, diagnostics = scaled_conformal_calibrate(y, preds, config=config)
+    sigma_series = hourly_sigma(y, preds[0.5], config=config)
+
+    local_days = _local_days(index)
+    mean_by_day = sigma_series.groupby(local_days).mean().sort_index()
+    diag_sigma_by_day = diagnostics.drop_duplicates("day").set_index("day")["sigma"].sort_index()
+
+    pd.testing.assert_series_equal(mean_by_day, diag_sigma_by_day, check_names=False)
+
+
+def test_hourly_sigma_constant_within_cadence_group_and_nan_when_uncalibrated() -> None:
+    index = _hourly_utc("2021-01-01", 24 * 15)
+    rng = np.random.default_rng(6)
+    y = pd.Series(50 + rng.normal(0, 5, len(index)), index=index)
+    q50 = pd.Series(50.0, index=index)  # constant query level: isolates cadence effects
+    config = ConformalConfig(
+        window_days=10,
+        embargo_days=1,
+        n_neighbors=50,
+        sigma_floor_fraction=0.0,
+        recompute_cadence_days=3,
+        min_calibration_hours=24,
+    )
+
+    sigma = hourly_sigma(y, q50, config=config)
+    local_days = _local_days(index)
+    delivery_days = pd.DatetimeIndex(sorted(pd.unique(local_days)))
+
+    # day_num 0: zero prior history -> always uncalibrated regardless of
+    # threshold; day_num 1-2 reuse that same (uncalibrated) recompute.
+    for day in delivery_days[:3]:
+        assert sigma.loc[local_days == day].isna().all()
+
+    # groups sharing one recompute (day_num % 3 == 0): constant within, and
+    # differs from the next group once the calibration window has shifted.
+    group_a_days = delivery_days[3:6]
+    group_b_days = delivery_days[6:9]
+    values_a = {float(sigma.loc[local_days == d].iloc[0]) for d in group_a_days}
+    values_b = {float(sigma.loc[local_days == d].iloc[0]) for d in group_b_days}
+    assert len(values_a) == 1
+    assert len(values_b) == 1
+    assert values_a != values_b
