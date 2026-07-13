@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -80,3 +80,67 @@ class ConformalConfig:
     # "uncalibrated" in the diagnostics (honest: no correction from too little
     # data). Early test days without a full window fall here.
     min_calibration_hours: int = 24 * 14
+
+
+# Local hour-of-day phases (Europe/Berlin), from the std(r) table in 4.4a spec 2.5.
+_NIGHT: tuple[int, ...] = (2, 3, 4, 5)
+_MORNING_RAMP: tuple[int, ...] = (7, 8)
+_MIDDAY: tuple[int, ...] = (10, 11, 12, 13)
+_EVENING_RAMP: tuple[int, ...] = (18, 19, 20)
+
+
+@dataclass(frozen=True)
+class BacktestConfig:
+    """Single source for all Sprint 4.4b backtest constants (spec section 3.2)."""
+
+    level: float = 0.95  # VaR/ES level, MUST match the 4.4a run
+    day_breach_k: int = 2  # >=k breach hours make a breach-day (spec 2.5)
+    n_bootstrap: int = (
+        10_000  # legacy fixed-B default; superseded by min/max_bootstrap below (Nachtrag 1)
+    )
+    bootstrap_seed: int = 20260710  # fixed for reproducibility
+    basel_window_days: int = (
+        250  # non-overlapping Basel window, in delivery days (Nachtrag 1, part B)
+    )
+    # Below this, CI flagged low_support (spec 2.6). cell_occupancy counts
+    # VALID days per (subset, MONTH-OF-YEAR pooled across every year in the
+    # sample) -- e.g. "February" spans every February in a 5-year backtest,
+    # not one calendar instance -- so 30 is comfortably reachable for any
+    # well-populated subset while still catching genuinely thin cells.
+    min_cell_days: int = 30
+
+    # --- Part A: bootstrap convergence monitoring (Nachtrag 1, section A) ---
+    min_bootstrap: int = 2_000  # never stop before this many replications
+    max_bootstrap: int = 50_000  # hard ceiling
+    check_every: int = 500  # convergence check interval (also the batch-means block size)
+    mc_tol: float = 0.01  # MCSE < mc_tol * CI width, required on BOTH bounds
+    n_stable: int = 2  # consecutive checkpoints the rule must hold (hysteresis)
+
+    # --- Part B: Basel traffic light (Nachtrag 1, section B) ---
+    # basel_window_days above is reused; windows are now NON-OVERLAPPING and
+    # the light runs ONLY on the full hourly series, never on a conditioning
+    # subset (spec Nachtrag 1, B.2c).
+    basel_drop_partial_window: bool = True  # discard an incomplete trailing window
+
+    # Ex-ante-known hour-of-day conditioning phases (LOCAL time).
+    hour_phases: dict[str, tuple[int, ...]] = field(
+        default_factory=lambda: {
+            "night": _NIGHT,
+            "morning_ramp": _MORNING_RAMP,
+            "midday": _MIDDAY,
+            "evening_ramp": _EVENING_RAMP,
+            "ramp": _MORNING_RAMP + _EVENING_RAMP,  # headline subset
+        }
+    )
+
+    # Ex-ante-known FORECAST-based regime subsets (spec 2.7). Both are the
+    # forecast twins of realised, ex-post RegimeConfig flags, so they are valid
+    # conditioning sets. The dunkelflaute threshold REUSES the realised scarcity
+    # threshold from RegimeConfig (import it; do NOT re-hardcode 0.90) so the
+    # ex-ante and ex-post twins share exactly one number. The surplus threshold
+    # is 0 by definition (residual_load_forecast < 0 == renewable prod > load),
+    # not a tunable magic number.
+    dunkelflaute_forecast_uses_regime_threshold: bool = (
+        True  # residual_share_fc > RegimeConfig scarcity thr.
+    )
+    surplus_forecast_residual_load_threshold: float = 0.0  # residual_load_forecast < 0

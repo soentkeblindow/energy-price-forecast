@@ -102,6 +102,7 @@ module = [
     "streamlit.*",
     "holidays.*",
     "optuna.*",
+    "scipy.*",
 ]
 ignore_missing_imports = true
 
