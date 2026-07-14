@@ -67,6 +67,22 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         help="Overrides BacktestConfig.max_bootstrap (Nachtrag 1, part A).",
     )
+    p.add_argument(
+        "--block-days",
+        default=None,
+        type=int,
+        help="Overrides BacktestConfig.block_days (Nachtrag 2, part A). Passed to every "
+        "stratified_day_block_bootstrap call.",
+    )
+    p.add_argument(
+        "--tag",
+        default="",
+        help="Suffix for backtest_coverage.csv / backtest_variant_contrast.csv and the "
+        "MLflow run name (Nachtrag 2, part A). Empty (default) keeps the historical "
+        "filenames/run name unchanged; a non-empty tag also skips writing the "
+        "bootstrap-independent descriptive/Basel outputs (they would just be identical "
+        "copies across the block_days grid).",
+    )
     p.add_argument("--study", default="backtest_risk")
     p.add_argument("--note", default="", help="MLflow tag: free-text run note.")
     return p.parse_args()
@@ -173,6 +189,7 @@ def _bootstrap_ci(
         check_every=config.check_every,
         mc_tol=config.mc_tol,
         n_stable=config.n_stable,
+        block_days=config.block_days,
     )
 
 
@@ -197,6 +214,8 @@ def main() -> None:
     config = BacktestConfig()
     if args.max_bootstrap is not None:
         config = dataclasses.replace(config, max_bootstrap=args.max_bootstrap)
+    if args.block_days is not None:
+        config = dataclasses.replace(config, block_days=args.block_days)
     regime_config = RegimeConfig()
 
     _validate_level_against_4_4a(config.level)
@@ -285,6 +304,7 @@ def main() -> None:
                     "variant": variant,
                     "side": side,
                     "subset": subset_name,
+                    "block_days": config.block_days,
                     "n": n,
                     "n_breach": n_breach,
                     "breach_rate": kupiec["breach_rate"],
@@ -302,6 +322,9 @@ def main() -> None:
                     "z2": float("nan"),
                     "z2_ci_low": float("nan"),
                     "z2_ci_high": float("nan"),
+                    "breach_rate_ci_excludes_alpha": None,
+                    "z1_excludes_zero": None,
+                    "z2_excludes_zero": None,
                     "n_bootstrap_used": float("nan"),
                     "converged": None,
                     # basel_* is a CALENDAR construct (Nachtrag 1, B.2c) --
@@ -347,10 +370,26 @@ def main() -> None:
                     )
                     row["breach_rate_ci_low"] = breach_ci["ci_low"]
                     row["breach_rate_ci_high"] = breach_ci["ci_high"]
+                    # The honest, day-correlation-corrected counterpart to
+                    # kupiec_pvalue < 0.05: does the bootstrap CI exclude the
+                    # nominal target rate (1 - level)? Kupiec's hourly chi2 is
+                    # anti-conservative (intra-day breaches are correlated),
+                    # so it rejects strictly more often than this does -- see
+                    # docs/backtest_results.md section 1 for the real-data gap.
+                    alpha = 1.0 - config.level
+                    row["breach_rate_ci_excludes_alpha"] = not (
+                        breach_ci["ci_low"] <= alpha <= breach_ci["ci_high"]
+                    )
                     row["z1_ci_low"] = z1_ci["ci_low"]
                     row["z1_ci_high"] = z1_ci["ci_high"]
                     row["z2_ci_low"] = z2_ci["ci_low"]
                     row["z2_ci_high"] = z2_ci["ci_high"]
+                    # Same "honest verdict" logic as breach_rate_ci_excludes_alpha,
+                    # for the severity (Z1/Z2) side: does the bootstrap CI exclude 0
+                    # (Nachtrag 2 spec, 2.6)? Boundary touch does NOT count as
+                    # exclusion -- the conservative convention.
+                    row["z1_excludes_zero"] = not (z1_ci["ci_low"] <= 0.0 <= z1_ci["ci_high"])
+                    row["z2_excludes_zero"] = not (z2_ci["ci_low"] <= 0.0 <= z2_ci["ci_high"])
                     n_bootstrap_used, converged = _combine_bootstrap_meta(breach_ci, z1_ci, z2_ci)
                     row["n_bootstrap_used"] = n_bootstrap_used
                     row["converged"] = converged
@@ -399,6 +438,7 @@ def main() -> None:
                 {
                     "side": side,
                     "subset": subset_name,
+                    "block_days": config.block_days,
                     "d_es_ratio": es_ci["point"],
                     "d_es_ratio_ci_low": es_ci["ci_low"],
                     "d_es_ratio_ci_high": es_ci["ci_high"],
@@ -523,49 +563,75 @@ def main() -> None:
         "validated risk number (4.4a spec 2.3): frequency/count columns are filled, "
         "but z1/z2 and their bootstrap CIs are NaN by design."
     )
-    log.warning(
-        "backtest_descriptive_expost.csv conditions on REALISED price outcomes "
-        "(spike, negative_price) -- these rows are descriptive only "
-        "(inferential=False), never a coverage verdict (spec 2.7)."
-    )
-    log.warning(
-        "backtest_basel_windows.csv (Nachtrag 1, part B): non-overlapping windows on "
-        "the FULL hourly series only (never a conditioning subset); illustrative, not "
-        "a regulatory verdict -- zone bounds assume independent hours, which this "
-        "book's intra-day breach clustering violates (see file header, spec B.3)."
-    )
 
     basel_windows_table = pd.DataFrame(basel_window_rows)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    coverage_path = args.out_dir / "backtest_coverage.csv"
-    contrast_path = args.out_dir / "backtest_variant_contrast.csv"
-    descriptive_path = args.out_dir / "backtest_descriptive_expost.csv"
-    basel_windows_path = args.out_dir / "backtest_basel_windows.csv"
+    suffix = f"_{args.tag}" if args.tag else ""
+    coverage_path = args.out_dir / f"backtest_coverage{suffix}.csv"
+    contrast_path = args.out_dir / f"backtest_variant_contrast{suffix}.csv"
     coverage_table.to_csv(coverage_path, index=False)
     contrast_table.to_csv(contrast_path, index=False)
-    descriptive_table.to_csv(descriptive_path, index=False)
-    with open(basel_windows_path, "w", encoding="utf-8", newline="") as f:
-        f.write(
-            "# ILLUSTRATIVE, not a regulatory verdict (spec 4.4b 2.9, Nachtrag 1 B).\n"
-            "# Non-overlapping windows of BacktestConfig.basel_window_days delivery days\n"
-            "# on the FULL hourly series only (never a conditioning subset, Nachtrag 1\n"
-            "# B.2c). An incomplete trailing window is dropped when\n"
-            "# BacktestConfig.basel_drop_partial_window (default True).\n"
-            "# Zone boundaries assume INDEPENDENT hours (binomial); intra-day breaches\n"
-            "# cluster in this book (hourly chris_ind_lr is large by construction, spec\n"
-            "# 2.4), so the breach count is overdispersed relative to binomial and these\n"
-            "# zone bounds are too tight -- a perfectly calibrated model will show\n"
-            "# yellow too often (Nachtrag 1, B.3).\n"
+    written_paths = [coverage_path, contrast_path]
+
+    if args.tag:
+        log.info(
+            "tag=%r set: skipping backtest_descriptive_expost.csv / "
+            "backtest_basel_windows.csv -- they are bootstrap-independent (unaffected by "
+            "--block-days), so writing them per tag would just produce identical copies "
+            "(Nachtrag 2, part A).",
+            args.tag,
         )
-        basel_windows_table.to_csv(f, index=False)
-    for path in (coverage_path, contrast_path, descriptive_path, basel_windows_path):
+    else:
+        log.warning(
+            "backtest_descriptive_expost.csv conditions on REALISED price outcomes "
+            "(spike, negative_price) -- these rows are descriptive only "
+            "(inferential=False), never a coverage verdict (spec 2.7)."
+        )
+        log.warning(
+            "backtest_basel_windows.csv (Nachtrag 1, part B): non-overlapping windows on "
+            "the FULL hourly series only (never a conditioning subset); illustrative, not "
+            "a regulatory verdict -- zone bounds assume independent hours, which this "
+            "book's intra-day breach clustering violates (see file header, spec B.3)."
+        )
+        descriptive_path = args.out_dir / "backtest_descriptive_expost.csv"
+        basel_windows_path = args.out_dir / "backtest_basel_windows.csv"
+        descriptive_table.to_csv(descriptive_path, index=False)
+        with open(basel_windows_path, "w", encoding="utf-8", newline="") as f:
+            f.write(
+                "# ILLUSTRATIVE, not a regulatory verdict (spec 4.4b 2.9, Nachtrag 1 B).\n"
+                "# Non-overlapping windows of BacktestConfig.basel_window_days delivery days\n"
+                "# on the FULL hourly series only (never a conditioning subset, Nachtrag 1\n"
+                "# B.2c). An incomplete trailing window is dropped when\n"
+                "# BacktestConfig.basel_drop_partial_window (default True).\n"
+                "# Zone boundaries assume INDEPENDENT hours (binomial); intra-day breaches\n"
+                "# cluster in this book (hourly chris_ind_lr is large by construction, spec\n"
+                "# 2.4), so the breach count is overdispersed relative to binomial and these\n"
+                "# zone bounds are too tight -- a perfectly calibrated model will show\n"
+                "# yellow too often (Nachtrag 1, B.3).\n"
+            )
+            basel_windows_table.to_csv(f, index=False)
+        written_paths += [descriptive_path, basel_windows_path]
+
+    for path in written_paths:
         log.info("written to %s", path)
 
     n_subsets_kupiec_rejected = int(
         (
             (coverage_table["variant"].isin(_VALIDATED_VARIANTS))
             & (coverage_table["kupiec_pvalue"] < 0.05)
+        ).sum()
+    )
+    n_subsets_bootstrap_rejected = int(
+        (
+            coverage_table["breach_rate_ci_excludes_alpha"].notna()
+            & coverage_table["breach_rate_ci_excludes_alpha"].astype("boolean")
+        ).sum()
+    )
+    n_subsets_z1_excludes_zero = int(
+        (
+            coverage_table["z1_excludes_zero"].notna()
+            & coverage_table["z1_excludes_zero"].astype("boolean")
         ).sum()
     )
     ramp_short_row = contrast_table[
@@ -575,10 +641,14 @@ def main() -> None:
         bool(ramp_short_row["separates"].iloc[0]) if len(ramp_short_row) else False
     )
 
+    run_name = f"backtest_risk_{args.tag}" if args.tag else "backtest_risk"
+
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment(CALIBRATION_EXPERIMENT_NAME)
-    with mlflow.start_run(run_name="backtest_risk"):
-        mlflow.set_tags({"study": args.study, "note": args.note})
+    with mlflow.start_run(run_name=run_name):
+        mlflow.set_tags(
+            {"study": args.study, "note": args.note, "block_days": str(config.block_days)}
+        )
         mlflow.log_params(
             {
                 "level": config.level,
@@ -592,6 +662,7 @@ def main() -> None:
                 "basel_window_days": config.basel_window_days,
                 "basel_drop_partial_window": config.basel_drop_partial_window,
                 "min_cell_days": config.min_cell_days,
+                "block_days": config.block_days,
             }
         )
         n_cells_not_converged = int(
@@ -602,12 +673,15 @@ def main() -> None:
         mlflow.log_metrics(
             {
                 "n_subsets_kupiec_rejected": float(n_subsets_kupiec_rejected),
+                "n_subsets_bootstrap_rejected": float(n_subsets_bootstrap_rejected),
+                "n_subsets_z1_excludes_zero": float(n_subsets_z1_excludes_zero),
                 "ramp_short_separates": float(ramp_short_separates),
                 "surplus_proxy_hit_rate": surplus_proxy_hit_rate,
                 "n_cells_not_converged": float(n_cells_not_converged),
+                "block_days": float(config.block_days),
             }
         )
-        for path in (coverage_path, contrast_path, descriptive_path, basel_windows_path):
+        for path in written_paths:
             mlflow.log_artifact(str(path))
 
     log.info("MLflow backtest_risk run logged.")

@@ -108,6 +108,10 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Nachtrag 2, part A: backtest_block_sensitivity.py is deliberately a thin,
+# testable script (not part of the energy_price_forecast package) -- this
+# puts the repo root on sys.path so tests can `import scripts.<name>`.
+pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

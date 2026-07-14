@@ -52,13 +52,28 @@ def _day_positions(index: pd.DatetimeIndex, *, local_tz: str) -> pd.Series:
 
 
 def _draw_replicate(
-    month_days: dict[int, list[np.ndarray]], rng: np.random.Generator
+    month_days: dict[int, list[np.ndarray]], rng: np.random.Generator, *, block_days: int
 ) -> np.ndarray:
+    """Moving block bootstrap draw, within each month-of-year pool independently.
+
+    For a pool of n_m days: n_starts = max(1, n_m - block_days + 1) overlapping
+    candidate block starts, n_blocks = ceil(n_m / block_days) blocks drawn WITH
+    replacement, concatenated and TRUNCATED to exactly n_m days -- so every
+    replicate reproduces the pool's own day-count exactly (spec Nachtrag 2,
+    2.2). At block_days=1, n_starts == n_blocks == n_m and this collapses to
+    `rng.integers(0, n_m, size=n_m)`, the same RNG call as the pre-Nachtrag-2
+    code (bit-exact backward compatibility, spec 2.3).
+    """
     chosen: list[np.ndarray] = []
     for days_in_month in month_days.values():
-        n_days = len(days_in_month)
-        draw = rng.integers(0, n_days, size=n_days)
-        chosen.extend(days_in_month[d] for d in draw)
+        n_m = len(days_in_month)
+        n_starts = max(1, n_m - block_days + 1)
+        n_blocks = -(-n_m // block_days)  # ceil(n_m / block_days)
+        starts = rng.integers(0, n_starts, size=n_blocks)
+        flat_days: list[np.ndarray] = []
+        for s in starts:
+            flat_days.extend(days_in_month[s : s + block_days])
+        chosen.extend(flat_days[:n_m])
     return np.concatenate(chosen)
 
 
@@ -74,16 +89,69 @@ def stratified_day_block_bootstrap(
     check_every: int,
     mc_tol: float,
     n_stable: int,
+    block_days: int = 1,
 ) -> dict[str, float | int | bool]:
-    """Month-of-year-stratified, day-block bootstrap CI with MC convergence monitoring.
+    """Month-stratified, MULTI-DAY-block bootstrap CI with MC convergence monitoring.
 
-    Stratification and blocking are UNCHANGED from the original design (spec
-    2.6): stratum = calendar MONTH NUMBER (1-12) of the delivery day
+    Stratum = calendar MONTH NUMBER (1-12) of the delivery day
     (Europe/Berlin, `local_tz`), pooling that same month across every year
-    present; block = delivery day (all rows of `frame` on that day stay
-    together -- pass an already valid-hours-filtered frame if that filtering
-    matters to `statistic`). Each replicate draws, WITHIN each month-of-year
-    pool, that pool's own day-count with replacement.
+    present (unchanged from the original design, spec 2.6). Block = a run of
+    `block_days` CONSECUTIVE delivery days (all their valid hours stay
+    together), drawn as a MOVING BLOCK BOOTSTRAP within each month-of-year
+    pool: each replicate draws ceil(n_m / block_days) blocks with replacement
+    from that pool's overlapping candidate starts, concatenates them, and
+    TRUNCATES to exactly n_m days -- so every replicate still reproduces the
+    pool's real day-count (the stratification contract, spec 2.6).
+    Truncation costs block integrity on at most the LAST block per pool;
+    keeping the day-count exact is the stronger guarantee and wins (spec
+    Nachtrag 2, 2.2).
+
+    `block_days=1` (default) is the historical one-day block and reproduces
+    pre-Nachtrag-2 results BIT-EXACTLY: the draw collapses to
+    `rng.integers(0, n_m, size=n_m)`, the same RNG call as before (spec
+    Nachtrag 2, 2.3).
+
+    Why `block_days > 1` exists (spec Nachtrag 2, 1.1): the one-day block
+    assumes days are exchangeable within a month. The daily Christoffersen
+    LR_ind measured in the Nachtrag 1 run (53-104 vs. a chi2_1 critical value
+    of 3.84) FALSIFIES that assumption -- day-level breaches cluster
+    (multi-day cold snaps / Dunkelflauten). So the one-day-block CIs are
+    somewhat TOO NARROW; the direction of the error is known, the magnitude
+    is not. A grid over `block_days` (BacktestConfig.block_days_grid)
+    measures it, without replacing the reported `block_days=1` headline.
+
+    Overlapping CANDIDATE blocks are NOT the Basel mistake (Nachtrag 1, part
+    B): there we took a MAXIMUM over overlapping windows, i.e. we SELECTED
+    the worst alignment. Here blocks are drawn at RANDOM, with no selection
+    -- this is the standard moving block bootstrap (Kuensch 1989) and
+    introduces no selection bias.
+
+    NOTE: "consecutive" means consecutive in that month-of-year pool's
+    sorted list of AVAILABLE delivery days, not necessarily calendar-adjacent
+    -- the warm-up drop and the `min_valid_hours` drop can leave holes within
+    a year, and the month-of-year pooling itself means the list jumps from
+    one year's instance of the month to the next year's at pool boundaries.
+    A deliberate approximation (spec Nachtrag 2, 2.2): restricting to
+    calendar-contiguous blocks would thin the candidate set and distort the
+    stratification. A block that happens to straddle such a jump behaves
+    like two independent days rather than a true dependency run, which
+    dilutes (never inflates) the measured `block_days` effect.
+
+    A month-of-year pool with `n_m < block_days` has exactly one candidate
+    start (the whole pool); after truncation that pool's replicate equals the
+    original (no resampling variance from it) -- no crash, logged at DEBUG.
+
+    Convergence, `low_support` orthogonality, no-fishing stopping rule:
+    unchanged from Nachtrag 1. `low_support` (`cell_occupancy`) is
+    INDEPENDENT of `block_days` by design (spec Nachtrag 2, 2.5) -- thin
+    cells are a DATA problem, block length is a RESAMPLING problem. Larger
+    blocks shrink the effective sample size and WIDEN the CI; that widening
+    IS the signal, not a second low-support flag.
+
+    Raises ValueError if `block_days < 1`. Returns a `block_days` key
+    (echoing the input) in addition to the fields below, so a row carries its
+    own resampling regime without needing to be reconstructed from a file
+    name.
 
     Convergence (Nachtrag 1, part A): every `check_every` replications, this
     treats the replications drawn so far as `B // check_every` equal-length
@@ -120,6 +188,9 @@ def stratified_day_block_bootstrap(
     seed). Does NOT serve the Christoffersen family (which uses chi2): an
     i.i.d. day resample would destroy the serial dependence LR_ind measures.
     """
+    if block_days < 1:
+        raise ValueError(f"block_days must be >= 1, got {block_days}")
+
     index = pd.DatetimeIndex(frame.index)
     day_positions = _day_positions(index, local_tz=local_tz)
 
@@ -127,6 +198,17 @@ def stratified_day_block_bootstrap(
     month_days: dict[int, list[np.ndarray]] = {}
     for month, positions in zip(months, day_positions, strict=True):
         month_days.setdefault(int(month), []).append(positions)
+
+    for month, days_in_month in month_days.items():
+        if len(days_in_month) < block_days:
+            log.debug(
+                "stratified_day_block_bootstrap: month-of-year %d has only %d day(s), "
+                "fewer than block_days=%d -- every replicate for this pool collapses to "
+                "the original day list (no resampling variance from it).",
+                month,
+                len(days_in_month),
+                block_days,
+            )
 
     rng = np.random.default_rng(seed)
     alpha = 1.0 - ci
@@ -141,7 +223,7 @@ def stratified_day_block_bootstrap(
     while True:
         target = min(next_checkpoint, max_bootstrap)
         while len(thetas) < target:
-            replicate_positions = _draw_replicate(month_days, rng)
+            replicate_positions = _draw_replicate(month_days, rng, block_days=block_days)
             thetas.append(statistic(frame.iloc[replicate_positions]))
 
         b = len(thetas)
@@ -189,6 +271,7 @@ def stratified_day_block_bootstrap(
         "ci_low": ci_low,
         "ci_high": ci_high,
         "n_days": float(len(day_positions)),
+        "block_days": block_days,
         "n_bootstrap_used": n_bootstrap_used,
         "converged": converged,
     }

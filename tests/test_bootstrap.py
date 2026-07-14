@@ -341,3 +341,294 @@ def test_cell_occupancy_pools_partial_month_across_years_above_threshold() -> No
 
 def test_bootstrap_module_does_not_import_christoffersen() -> None:
     assert not hasattr(bootstrap_module, "christoffersen_independence")
+
+
+# ---------------------------------------------------------------------------
+# Nachtrag 2, part A: block_days moving-block bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_block_days_default_reproduces_pre_nachtrag2_golden_values() -> None:
+    # The most important test (spec Nachtrag 2, 5.1): block_days=1 (default)
+    # must reproduce the EXACT pre-Nachtrag-2 RNG call sequence. Golden
+    # values frozen from the committed pre-Nachtrag-2 code (commit 3690007)
+    # for this exact frame/statistic/seed combination.
+    frame = _month_frame({"2021-01-01": 20, "2022-01-01": 15, "2021-02-01": 10})
+    statistic = lambda df: float(df["value"].mean())  # noqa: E731
+
+    result = stratified_day_block_bootstrap(
+        frame,
+        statistic,
+        local_tz="UTC",
+        seed=42,
+        min_bootstrap=200,
+        max_bootstrap=2000,
+        check_every=100,
+        mc_tol=0.05,
+        n_stable=2,
+    )
+
+    assert result["point"] == pytest.approx(539.5)
+    assert result["ci_low"] == pytest.approx(472.55333333333334)
+    assert result["ci_high"] == pytest.approx(598.4466666666667)
+    assert result["n_days"] == 45.0
+    assert result["n_bootstrap_used"] == 300
+    assert result["converged"] is True
+    assert result["block_days"] == 1
+
+    # Explicit block_days=1 must match the (implicit-default) call bit-exactly.
+    explicit = stratified_day_block_bootstrap(
+        frame,
+        statistic,
+        local_tz="UTC",
+        seed=42,
+        min_bootstrap=200,
+        max_bootstrap=2000,
+        check_every=100,
+        mc_tol=0.05,
+        n_stable=2,
+        block_days=1,
+    )
+    assert explicit == result
+
+
+def test_block_days_keeps_runs_of_consecutive_days_intact() -> None:
+    # block_days=3, tested directly against the internal draw (spec Nachtrag
+    # 2, 5.2): each "day" is a single-element position array holding its own
+    # list-index (0..19), so the concatenated replicate directly reveals
+    # which day-list positions were drawn, in draw order. Chunking the flat
+    # output into consecutive groups of `block_days` must recover exactly the
+    # blocks _draw_replicate concatenated: each chunk (the last one possibly
+    # shorter, due to truncation) is a run of consecutive list positions.
+    month_days = {1: [np.array([i]) for i in range(20)]}
+    rng = np.random.default_rng(5)
+    block_days = 3
+
+    replicate = bootstrap_module._draw_replicate(month_days, rng, block_days=block_days)
+    day_order = replicate.tolist()
+    assert len(day_order) == 20  # month invariant: truncated back to n_m=20
+
+    for start in range(0, len(day_order), block_days):
+        block = day_order[start : start + block_days]
+        assert block == list(range(block[0], block[0] + len(block))), (
+            f"block starting at {start} is not a run of consecutive positions: {block}"
+        )
+
+
+def test_block_days_preserves_month_composition_invariant() -> None:
+    frame = _month_frame({"2021-01-01": 20, "2022-01-01": 15, "2021-02-01": 10})
+
+    def count_by_month(df: pd.DataFrame) -> dict[int, int]:
+        months = _month_of_year(df)
+        return {1: int((months == 1).sum()) // 24, 2: int((months == 2).sum()) // 24}
+
+    for block_days in (1, 3, 5, 7):
+        counts: list[dict[int, int]] = []
+
+        def record(df: pd.DataFrame, counts: list[dict[int, int]] = counts) -> float:
+            counts.append(count_by_month(df))
+            return 0.0
+
+        stratified_day_block_bootstrap(
+            frame,
+            record,
+            local_tz="UTC",
+            seed=1,
+            min_bootstrap=20,
+            max_bootstrap=20,
+            check_every=20,
+            mc_tol=0.01,
+            n_stable=1,
+            block_days=block_days,
+        )
+        for c in counts:
+            assert c == {1: 35, 2: 10}, f"block_days={block_days} broke the month invariant"
+
+
+def test_block_days_widens_ci_for_autocorrelated_breach_series() -> None:
+    # Behavioural core (spec Nachtrag 2, 5.4): with strongly clustered
+    # (multi-day-run) daily values, a multi-day block must capture more of
+    # the true variance than the one-day block -- the whole motivation for
+    # this Nachtrag.
+    hours_per_day = 24
+    n_days = 60
+    frame = _month_frame({"2021-01-01": n_days}, hours_per_day=hours_per_day)
+    # Clumped signal: 5-day runs alternating between 0 and 1.
+    day_values = (np.arange(n_days) // 5) % 2
+    frame["value"] = np.repeat(day_values.astype(float), hours_per_day)
+
+    def day_mean(df: pd.DataFrame) -> float:
+        return float(df["value"].to_numpy().reshape(-1, hours_per_day)[:, 0].mean())
+
+    result_1 = stratified_day_block_bootstrap(
+        frame,
+        day_mean,
+        local_tz="UTC",
+        seed=2,
+        min_bootstrap=2000,
+        max_bootstrap=2000,
+        check_every=2000,
+        mc_tol=0.01,
+        n_stable=1,
+        block_days=1,
+    )
+    result_5 = stratified_day_block_bootstrap(
+        frame,
+        day_mean,
+        local_tz="UTC",
+        seed=2,
+        min_bootstrap=2000,
+        max_bootstrap=2000,
+        check_every=2000,
+        mc_tol=0.01,
+        n_stable=1,
+        block_days=5,
+    )
+
+    width_1 = result_1["ci_high"] - result_1["ci_low"]
+    width_5 = result_5["ci_high"] - result_5["ci_low"]
+    assert width_5 > 1.2 * width_1
+
+
+def test_block_days_does_not_widen_ci_for_iid_series() -> None:
+    # Counterpart (spec Nachtrag 2, 5.5): with i.i.d. daily values, a
+    # multi-day block must NOT fabricate extra variance.
+    rng = np.random.default_rng(9)
+    hours_per_day = 24
+    n_days = 60
+    frame = _month_frame({"2021-01-01": n_days}, hours_per_day=hours_per_day)
+    day_values = rng.binomial(1, 0.5, size=n_days).astype(float)
+    frame["value"] = np.repeat(day_values, hours_per_day)
+
+    def day_mean(df: pd.DataFrame) -> float:
+        return float(df["value"].to_numpy().reshape(-1, hours_per_day)[:, 0].mean())
+
+    result_1 = stratified_day_block_bootstrap(
+        frame,
+        day_mean,
+        local_tz="UTC",
+        seed=2,
+        min_bootstrap=2000,
+        max_bootstrap=2000,
+        check_every=2000,
+        mc_tol=0.01,
+        n_stable=1,
+        block_days=1,
+    )
+    result_5 = stratified_day_block_bootstrap(
+        frame,
+        day_mean,
+        local_tz="UTC",
+        seed=2,
+        min_bootstrap=2000,
+        max_bootstrap=2000,
+        check_every=2000,
+        mc_tol=0.01,
+        n_stable=1,
+        block_days=5,
+    )
+
+    width_1 = result_1["ci_high"] - result_1["ci_low"]
+    width_5 = result_5["ci_high"] - result_5["ci_low"]
+    assert width_5 == pytest.approx(width_1, rel=0.20)
+
+
+def test_block_days_short_month_collapses_to_original(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # n_m=3 < block_days=7: exactly one candidate start (the whole pool);
+    # after truncation the replicate for this pool equals the original.
+    frame = _month_frame({"2021-01-01": 3})
+    statistic = lambda df: float(df["value"].mean())  # noqa: E731
+    original_value = statistic(frame)
+
+    with caplog.at_level(logging.DEBUG, logger="energy_price_forecast.evaluation.bootstrap"):
+        result = stratified_day_block_bootstrap(
+            frame,
+            statistic,
+            local_tz="UTC",
+            seed=3,
+            min_bootstrap=50,
+            max_bootstrap=50,
+            check_every=50,
+            mc_tol=0.01,
+            n_stable=1,
+            block_days=7,
+        )
+
+    assert result["ci_low"] == pytest.approx(original_value)
+    assert result["ci_high"] == pytest.approx(original_value)
+    assert any("fewer than block_days" in r.message for r in caplog.records)
+
+
+def test_block_days_is_deterministic() -> None:
+    frame = _month_frame({"2021-01-01": 20, "2021-02-01": 15})
+    statistic = lambda df: float(df["value"].mean())  # noqa: E731
+
+    def _run() -> dict[str, float | int | bool]:
+        return stratified_day_block_bootstrap(
+            frame,
+            statistic,
+            local_tz="UTC",
+            seed=8,
+            min_bootstrap=200,
+            max_bootstrap=2000,
+            check_every=100,
+            mc_tol=0.05,
+            n_stable=2,
+            block_days=5,
+        )
+
+    r1 = _run()
+    r2 = _run()
+    assert r1 == r2
+    assert r1["n_bootstrap_used"] == r2["n_bootstrap_used"]
+
+
+@pytest.mark.parametrize("bad_block_days", [0, -1])
+def test_block_days_validation_rejects_non_positive(bad_block_days: int) -> None:
+    frame = _month_frame({"2021-01-01": 10})
+    statistic = lambda df: float(df["value"].mean())  # noqa: E731
+
+    with pytest.raises(ValueError, match="block_days"):
+        stratified_day_block_bootstrap(
+            frame,
+            statistic,
+            local_tz="UTC",
+            seed=1,
+            min_bootstrap=10,
+            max_bootstrap=10,
+            check_every=10,
+            mc_tol=0.01,
+            n_stable=1,
+            block_days=bad_block_days,
+        )
+
+
+def test_low_support_is_invariant_to_block_days() -> None:
+    frame = _month_frame({"2021-01-01": 20, "2022-01-01": 15, "2021-02-01": 5})
+    result = cell_occupancy(frame, local_tz="UTC", min_cell_days=30)
+    # cell_occupancy takes no block_days parameter at all (spec Nachtrag 2,
+    # 2.5) -- calling it again on the same frame must be identical regardless
+    # of what block_days any bootstrap call elsewhere used.
+    result_again = cell_occupancy(frame, local_tz="UTC", min_cell_days=30)
+    assert result == result_again
+
+
+def test_block_days_is_echoed_in_return_contract() -> None:
+    frame = _month_frame({"2021-01-01": 10})
+    statistic = lambda df: float(df["value"].mean())  # noqa: E731
+
+    result = stratified_day_block_bootstrap(
+        frame,
+        statistic,
+        local_tz="UTC",
+        seed=1,
+        min_bootstrap=10,
+        max_bootstrap=10,
+        check_every=10,
+        mc_tol=0.01,
+        n_stable=1,
+        block_days=3,
+    )
+    assert result["block_days"] == 3

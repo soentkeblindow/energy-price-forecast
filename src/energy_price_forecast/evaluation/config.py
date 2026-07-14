@@ -144,3 +144,19 @@ class BacktestConfig:
         True  # residual_share_fc > RegimeConfig scarcity thr.
     )
     surplus_forecast_residual_load_threshold: float = 0.0  # residual_load_forecast < 0
+
+    # --- Nachtrag 2: block bootstrap sensitivity ---------------------------
+    # Block length in DELIVERY DAYS for the stratified block bootstrap.
+    # 1 == the historical one-day block (Nachtrag 1 and earlier) and is the
+    # REPORTED headline. Larger values capture day-to-day dependence (multi-day
+    # cold snaps / Dunkelflauten) at the cost of effective sample size. The
+    # daily Christoffersen LR_ind of 53-104 in the Nachtrag 1 run is the direct
+    # evidence that day-to-day dependence EXISTS, i.e. that the one-day block
+    # yields CIs that are somewhat TOO NARROW. We do not "fix" this by picking a
+    # different single value -- we measure how far the conclusions move across a
+    # grid (spec Nachtrag 2, 2.4).
+    block_days: int = 1
+    # Grid for the sensitivity run. Upper bound 7 == the plausible persistence of
+    # the relevant regimes (cold snaps, Dunkelflauten); beyond that we only lose
+    # effective sample size without capturing more structure.
+    block_days_grid: tuple[int, ...] = (1, 3, 5, 7)
