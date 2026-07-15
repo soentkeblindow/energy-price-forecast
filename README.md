@@ -107,8 +107,10 @@ make report-assets
 
 - **LSTM/Transformer comparison** -- deliberately out of scope: the marginal accuracy gain over a well-tuned LightGBM quantile model is unlikely to justify the added complexity and interpretability cost for this use case.
 - **Diebold-Mariano significance test** on the LightGBM-vs-baseline MAE edge -- time-boxed and optional for this project phase; would add a formal significance statement alongside the already-reported effect size.
-- **Regime-adaptive calibration** (e.g. a ramp term in the local-scale estimate) -- the conditional coverage breaks documented above point directly at this as the next methodological step, not attempted here.
+- **Regime-adaptive calibration** -- the conditional coverage breaks documented above point directly at this as the next methodological step, not attempted here.
+- **A ramp term in the local-scale (sigma) estimate** -- a narrower fix targeting the specific intraday heteroskedasticity pattern behind the evening-ramp coverage breaks.
 - **Further risk measures** (drawdown statistics, extreme quantiles beyond q05/q95) -- out of scope for a backtesting-focused deliverable.
+- **A standalone 15-minute-resolution model**, rather than resampling the known post-2025-09-30 resolution change to an hourly grid.
 
 ## Links & docs
 
@@ -116,7 +118,7 @@ make report-assets
 - [`02_baselines.ipynb`](notebooks/02_baselines.ipynb) -- linear baselines (Lasso/Ridge/OLS) vs. naive benchmark.
 - [`03_model_diagnostics.ipynb`](notebooks/03_model_diagnostics.ipynb) -- LightGBM/ARIMAX point comparison, SHAP attribution, feature ablation.
 - [`04_regime_risk.ipynb`](notebooks/04_regime_risk.ipynb) -- conformal calibration, trading-book VaR/ES, full backtest validation (source of this README's headline figures/numbers).
-- `outputs/model_validation_report.md` -- independent-validation-style report (in progress).
+- [`model_validation_report.md`](outputs/model_validation_report.md) -- independent-validation-style review with a numbered findings catalogue (Limitation / Accepted / Remediated / Future Work).
 - <!-- dashboard: live link added in 5.4 -->
 
 ## License
