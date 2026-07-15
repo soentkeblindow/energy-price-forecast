@@ -1,125 +1,124 @@
-# Energy Price Forecast — Day-Ahead Germany (DE-LU)
+# Day-Ahead Power Price Forecasting & Risk Backtesting (DE-LU)
 
-[![CI](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml)
+Probabilistic forecasts with conformal calibration, ES/VaR backtesting, and regime-conditional validation.
 
-Day-ahead electricity price forecasting for the German–Luxembourg bidding zone using walk-forward backtesting, regularised linear baselines, gradient-boosted quantile regression (LightGBM), and classical time series (ARIMAX).
+<!-- badges: added in 5.4 -->
 
-**Status:** Sprint 4 complete — scaled conformal calibration, quantile rearrangement, regime-based diagnostics, and trading-book VaR/ES validated by a full backtest (Kupiec, Christoffersen, Acerbi-Szekely, stratified bootstrap). Sprint 5 (Streamlit dashboard) next.
+Probabilistic day-ahead price forecasting for the German-Luxembourg bidding zone (ENTSO-E data), comparing regularised linear baselines, LightGBM quantile regression, and ARIMAX under a strictly leakage-free walk-forward evaluation at gate-closure information (~12:00 D-1). The forecast intervals are then conformal-calibrated, and the resulting trading-book Value-at-Risk / Expected Shortfall of a hypothetical 10 MW book is **backtested in its own right** -- the same lens an independent model-validation unit would apply, not just a point-accuracy comparison.
 
-## Motivation
+## Coverage forest plot: the signature figure
 
-Transparent, leakage-free forecasting pipeline for short-term electricity prices, with explicit focus on regime-aware evaluation (energy crisis, negative prices, price spikes) and interpretable feature importance.
+<img src="outputs/assets/coverage_forest.png" alt="Coverage forest plot" width="600">
 
-## Stack
 
-Python 3.12+, `uv`, pandas + pyarrow, `entsoe-py`, scikit-learn, LightGBM, statsmodels (SARIMAX), SHAP, MLflow, pytest + ruff + mypy, GitHub Actions CI.
+Unconditionally the calibrated risk measure holds: Kupiec does not reject the breach-rate null anywhere at the `overall` subset. Conditionally it does not -- 35 of 60 validated (variant, side, subset) cells break coverage even under an honest, month-stratified day-block bootstrap test, concentrated in the evening ramp and the tail forecast-height buckets. That gap between unconditional and conditional calibration is the project's central finding, not a footnote.
 
-## Progress
+## Headline results
 
-| Sprint | Scope | Status |
-|---|---|---|
-| 1 | Data pipeline (ENTSO-E + commodities), EDA | ✅ Complete |
-| 2.2 | Walk-forward evaluation harness, leakage tests | ✅ Complete |
-| 2.3 | Feature engineering (calendar, fundamentals, lags, cross-border) | ✅ Complete |
-| 2.4 | Linear baselines (Lasso, Ridge, OLS), MLflow tracking | ✅ Complete |
-| 3.1 | LightGBM quantile forecaster | ✅ Complete |
-| 3.2 | Optuna hyperparameter tuning | ✅ Complete |
-| 3.3 | Quantile calibration evaluation | ✅ Complete |
-| 3.4 | ARIMAX (AR(2) + daily Fourier + exog) | ✅ Complete |
-| 3.5 | SHAP attribution, feature ablation, diagnostics notebook | ✅ Complete |
-| 4.1 | Realised-market regime tagging (scarcity, high wind, negative price, spikes) | ✅ Complete |
-| 4.2 | Regime-based point-accuracy breakdown | ✅ Complete |
-| 4.3 | Reliability diagnostics, scaled conformal calibration, quantile rearrangement | ✅ Complete |
-| 4.4 | Trading-book VaR/ES (raw / calibrated / FHS), full backtest validation | ✅ Complete |
-| 4.5 | Regime & risk deliverable notebook (`04_regime_risk.ipynb`) | ✅ Complete |
-| 5 | Streamlit dashboard | 🔄 Next |
+All metrics on the common 2021-2025 walk-forward test set (rolling-90-day window, `refit_every=1` for LightGBM, `refit_every=7` for ARIMAX).
 
-## Key Results
+| Model | MAE (EUR/MWh) | RMSE (EUR/MWh) | WAPE |
+|---|---|---|---|
+| Seasonal Naive | 34.77 | 56.20 | 0.290 |
+| Lasso | 24.23 | 38.40 | 0.202 |
+| ARIMAX | 22.87 | 35.74 | 0.191 |
+| **LightGBM** | **15.40** | **26.59** | **0.129** |
 
-All metrics on a common 2021–2025 walk-forward test set (rolling-90 day window, refit_every=1 for LightGBM, refit_every=7 for ARIMAX):
+- **LightGBM leads by a wide margin:** MAE 15.4 EUR/MWh vs. 22.9-24.2 for ARIMAX/Lasso and 34.8 for the naive benchmark -- roughly 37% lower error than the best alternative model.
+- **Raw quantile intervals massively under-cover:** reporting the raw, uncalibrated q05 as a 5% VaR limit breaches in 18.3% (long) / 17.8% (short) of hours, not 5%. Scaled conformal recalibration fixes this: breach rates drop to 4.9% (long) / 5.2% (short), and the implied capital buffer is 1.53x (long) / 1.76x (short) larger than the uncalibrated one would have reported.
+- **The calibrated risk measure passes the unconditional backtest but fails the conditional one:** Kupiec does not reject at `overall`, yet 35 of 60 conditioning cells (hour-of-day phase, forecast-height bucket, forecast-based regime) break coverage under an honest bootstrap CI -- see the signature figure above.
 
-| Model | MAE (EUR/MWh) |
-|---|---|
-| Seasonal Naive | ~35 |
-| Lasso (expanding window) | ~24 |
-| ARIMAX rolling-90 | ~23 |
-| **LightGBM rolling-90** | **~15.4** |
+## What makes this honest
 
-**Tuning finding:** Optuna-tuned LightGBM ≈ untuned across two independent runs — `_DEFAULT_PARAMS` are the de-facto baseline. The main gain came from shortening the training window (rolling-90 + daily refit), not from hyperparameter search.
+- **Gate-closure leakage discipline.** Every feature is restricted to information known by ~12:00 Europe/Berlin on D-1, the real day-ahead gate-closure time -- not information available only in hindsight.
+- **Walk-forward, not a random split.** All backtests use a rolling or expanding time-ordered evaluation; hyperparameter tuning happens in an inner loop nested inside that walk-forward, never touching test-period data.
+- **Calibration before risk, never the other way round.** The trading-book VaR/ES is computed on top of already-calibrated quantile forecasts, not on raw model output dressed up as a risk number.
+- **The risk measure is backtested, not just computed.** Three independent statistical test families -- Kupiec (frequency), Christoffersen (clustering), Acerbi-Szekely (severity) -- plus a month-stratified, day-block bootstrap for honest confidence intervals, applied to all 60 (variant x side x subset) cells.
+- **Findings are reported even when they complicate the story.** The conditional coverage breaks, the day-level breach clustering, and the ARIMAX under-coverage are stated as findings, not smoothed over -- see Honest limitations below.
 
-**Quantile calibration:** LightGBM q05–q95 bands are not well-calibrated (coverage 0.17/0.81 vs target 0.05/0.95). ARIMAX bands under-cover even more (~50% for the 90% band) as a contrast — motivating the conformal calibration below.
+## Figures
 
-**SHAP attribution:** `residual_load_forecast` dominates LightGBM importance (mean |SHAP| 7.1 EUR/MWh), followed by seasonal features (`month_sin`) and price lags. The tree captures a non-linear merit-order effect invisible to Lasso.
+![Fan chart: raw vs. calibrated quantile bands](outputs/assets/fan_chart_calibration.png)
 
-**Feature ablation:** Dropping 3 low-importance forecast-error features (wind offshore, solar, cross-border deviation) yields Δ MAE < 0.1 EUR/MWh — within walk-forward noise. These features can safely be removed for parsimony.
+Fan chart over a two-week window (2024-12-05 to 2024-12-19) containing the single highest-spread day in the test period (2024-12-12, ~829 EUR/MWh spread, a documented winter Dunkelflaute event). The raw 90% band (left) is visibly too narrow during the spike; the conformal-calibrated band (right) widens specifically where the raw band would have missed the realised price.
 
-**Conformal calibration:** scaled/normalized per-quantile conformal recalibration + isotonic rearrangement fixes the raw under-coverage: reporting a raw, uncalibrated q05 as a 5% VaR limit breaches in 18% of hours, not 5% (capital buffer 53–76% too small). After calibration, breach rates are 0.049 (long) / 0.052 (short) and Kupiec does not reject the unconditional null.
+<img src="outputs/assets/reliability_diagram.png" alt="Reliability diagram" width="420">
 
-**But calibration is unconditional, not conditional:** 35 of 60 validated (variant, side, subset) cells still break coverage in an honest, month-stratified day-block bootstrap test. The mechanism is one thing wearing three faces — conditional heteroskedasticity and regime persistence, concentrated in the evening ramp / Dunkelflaute / renewable-surplus — visible directly as multi-day breach clustering (Christoffersen `LR_ind` 53–104). Production recommendation: the directly-evidenced `calibrated` variant over `fhs` (Filtered Historical Simulation), based on the book's actual exposure profile (the evening ramp is a daily event and dominates it).
 
-## Quickstart
+Nominal vs. empirical one-sided coverage per quantile level. Raw LightGBM sits below the diagonal (under-coverage); the calibrated curve tracks the diagonal closely; ARIMAX (pale reference, 3-level grid only) under-covers more severely -- at the 0.95 level, empirical coverage is 62.3% against a 95% nominal target.
 
-```bash
-uv sync
-cp .env.example .env   # fill in your ENTSO-E API key
+![Forecast vs. actual, daily means](outputs/assets/forecast_vs_actual.png)
 
-# Build feature matrix
-uv run python scripts/build_interim.py
-uv run python scripts/build_features.py
+Daily-mean actual price vs. LightGBM median forecast over the full test period. The 2021/22 energy-crisis peak and the subsequent normalisation are clearly visible; the model tracks both regimes closely.
 
-# Run backtests
-uv run python scripts/backtest.py --model lgbm --alpha 0.5 \
-  --window rolling --train-span-days 90 --refit-every 1 \
-  --test-start 2021-01-01 --out data/processed/preds_lgbm_q50.parquet
-
-# Conformal calibration + rearrangement, then trading-book VaR/ES and its backtest
-uv run python scripts/calibrate_conformal.py
-uv run python scripts/compute_risk.py
-uv run python scripts/backtest_risk.py
-uv run python scripts/backtest_block_sensitivity.py   # block-bootstrap sensitivity grid
-
-# Open results notebooks
-jupyter lab notebooks/02_baselines.ipynb          # linear baseline analysis
-jupyter lab notebooks/03_model_diagnostics.ipynb  # Sprint-3 full diagnostics
-jupyter lab notebooks/04_regime_risk.ipynb        # Sprint-4 calibration + risk deliverable
-```
-
-## Project Structure
+## Project structure
 
 ```text
 ├── data/
 │   ├── raw/
-│   ├── interim/          # hourly price + fundamental data
-│   └── processed/        # feature matrix + backtest results
+│   ├── interim/            # hourly price + fundamental data
+│   └── processed/          # feature matrix + backtest/calibration/risk results
+├── outputs/
+│   ├── assets/              # exported PNG figures (this README's images)
+│   └── results/             # exported CSV tables + prediction snapshot (checked in)
 ├── notebooks/
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_baselines.ipynb
 │   ├── 03_model_diagnostics.ipynb   # point comparison, SHAP, fan charts, ablation
 │   └── 04_regime_risk.ipynb         # calibration + trading-book VaR/ES, backtest validation
-├── src/
-│   └── energy_price_forecast/
-│       ├── data/         # loaders, ENTSO-E + commodities clients
-│       ├── features/     # calendar, fundamentals, lags, availability, subset
-│       ├── models/       # SimilarDayNaive, Lasso/Ridge/OLS, LGBMForecaster,
-│       │                 #   ARIMAXForecaster, tuning (Optuna)
-│       ├── evaluation/   # walk-forward harness, metrics, quantile calibration,
-│       │                 #   regimes, breakdown, reliability, conformal,
-│       │                 #   rearrangement, residuals, risk, backtest, bootstrap
-│       └── dashboard/
-├── scripts/
-│   ├── build_interim.py
-│   ├── build_features.py
-│   ├── backtest.py                    # --model {naive,lasso,ridge,ols,lgbm,arimax}
-│   ├── tune.py                        # Optuna study + MLflow logging
-│   ├── evaluate_quantiles.py
-│   ├── evaluate_reliability.py        # reliability curve diagnostics
-│   ├── calibrate_conformal.py         # scaled conformal calibration + rearrangement
-│   ├── compute_risk.py                # trading-book VaR/ES (raw / calibrated / fhs)
-│   ├── backtest_risk.py               # Kupiec/Christoffersen/Acerbi-Szekely + stratified bootstrap
-│   └── backtest_block_sensitivity.py  # block-bootstrap sensitivity grid
-└── tests/                             # 417 tests, CI green
+├── src/energy_price_forecast/
+│   ├── data/                # loaders, ENTSO-E + commodities clients
+│   ├── features/            # calendar, fundamentals, lags, availability, subset
+│   ├── models/               # SimilarDayNaive, Lasso/Ridge/OLS, LGBMForecaster, ARIMAXForecaster, tuning
+│   ├── evaluation/           # walk-forward harness, metrics, regimes, calibration, risk, backtest, bootstrap
+│   ├── reporting/            # pure functions behind this README's figures/tables/snapshot
+│   └── dashboard/            # Streamlit app (Sprint 5.3)
+├── scripts/                  # backtest.py, calibrate_conformal.py, compute_risk.py, backtest_risk.py, ...
+└── tests/                    # 417+ tests, CI green
 ```
 
-## Disclaimer
+Data flows raw (ENTSO-E/commodities APIs) -> interim (hourly, normalised) -> features (leakage-safe) -> backtest predictions -> calibration/risk evaluation -> `outputs/` (the small, checked-in snapshot this README and the future dashboard read from).
 
-For educational and portfolio purposes only. Not financial or trading advice.
+## Getting started
+
+```bash
+uv sync
+cp .env.example .env   # fill in your ENTSO-E API key (Transparency Platform)
+
+# Rebuild the feature pipeline from raw data (optional -- not needed to read this README)
+uv run python scripts/build_interim.py
+uv run python scripts/build_features.py
+
+# Regenerate the figures/tables this README embeds, from already-persisted results
+make report-assets
+```
+
+`outputs/results/` contains checked-in, versioned snapshots of the backtest, calibration, and risk results -- the figures above and the numbers in this README are reproducible directly from those files, without needing an ENTSO-E API key or a full pipeline re-run. Raw data sources: ENTSO-E Transparency Platform (day-ahead prices, load, generation, cross-border flows) and Yahoo Finance (TTF gas, EUA CO2 futures); raw data itself is not redistributed in this repository.
+
+## Honest limitations
+
+- **Conditional coverage breaks in 35 of 60 cells**, concentrated in the evening ramp and the tail forecast-height buckets -- the calibration corrects the unconditional scale but not this conditional structure. In the evening ramp, `calibrated`/short alone breaches at 9.5% against a nominal 5% (CI [8.4%, 10.6%]) -- close to double the target rate in exactly the hours the book is most exposed.
+- **Day-level breach clustering survives the conformal correction.** Christoffersen's day-level independence test rejects independence for every validated (variant, side) combination at `overall` (`LR_ind` 53-104) -- breaches bunch into multi-day runs (cold snaps, Dunkelflauten), not just isolated hours.
+- **Kupiec on the raw hourly series is anti-conservative.** It rejects 43 of the same 60 cells -- more than the bootstrap's 35 -- because intra-day breaches are correlated and the hourly chi-square test does not know that. The honest, day-block-bootstrapped test is the one this project reports as the headline; Kupiec is shown alongside it, not in place of it.
+- **ARIMAX's quantile intervals under-cover more severely than LightGBM's, even before calibration.** At the 0.95 level, empirical coverage is 62.3% against a 95% nominal target, vs. LightGBM raw's 81.1% at the same level -- the documented cost of a classical linear-Gaussian interval assumption against a heavy-tailed, regime-switching price series.
+- **The energy-crisis period (2021/22) is a structural stress test for every model**, not a regime any of them was specifically tuned for -- performance there is reported, not excluded.
+
+## Future work
+
+- **LSTM/Transformer comparison** -- deliberately out of scope: the marginal accuracy gain over a well-tuned LightGBM quantile model is unlikely to justify the added complexity and interpretability cost for this use case.
+- **Diebold-Mariano significance test** on the LightGBM-vs-baseline MAE edge -- time-boxed and optional for this project phase; would add a formal significance statement alongside the already-reported effect size.
+- **Regime-adaptive calibration** (e.g. a ramp term in the local-scale estimate) -- the conditional coverage breaks documented above point directly at this as the next methodological step, not attempted here.
+- **Further risk measures** (drawdown statistics, extreme quantiles beyond q05/q95) -- out of scope for a backtesting-focused deliverable.
+
+## Links & docs
+
+- [`01_data_exploration.ipynb`](notebooks/01_data_exploration.ipynb) -- ENTSO-E data exploration, ACF analysis.
+- [`02_baselines.ipynb`](notebooks/02_baselines.ipynb) -- linear baselines (Lasso/Ridge/OLS) vs. naive benchmark.
+- [`03_model_diagnostics.ipynb`](notebooks/03_model_diagnostics.ipynb) -- LightGBM/ARIMAX point comparison, SHAP attribution, feature ablation.
+- [`04_regime_risk.ipynb`](notebooks/04_regime_risk.ipynb) -- conformal calibration, trading-book VaR/ES, full backtest validation (source of this README's headline figures/numbers).
+- `outputs/model_validation_report.md` -- independent-validation-style report (in progress).
+- <!-- dashboard: live link added in 5.4 -->
+
+## License
+
+[MIT](LICENSE). Data sources: ENTSO-E Transparency Platform and Yahoo Finance; see their respective terms for redistribution of the underlying raw data.
