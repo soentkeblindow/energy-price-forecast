@@ -76,6 +76,17 @@ Common 2021-2025 walk-forward test period, pooled MAE/RMSE/WAPE (source: `result
 
 LightGBM leads every benchmark by a wide margin -- roughly 33-37% lower MAE than the next-best alternative (Lasso, ARIMAX) and 56% lower than the naive benchmark.
 
+**Significance of the edge (source: `results/dm_test.csv`):** a Diebold-Mariano test on the LightGBM-vs-baseline MAE loss differentials confirms the edge is not sampling noise. The primary variant aggregates losses to daily means (`n` = 1,827 days) -- all 24 hours of a delivery day share the same gate-closure information set, so daily means are the natural unit of an independent observation -- with a Newey-West HAC variance estimate (`hac_lag` = 7) and the Harvey-Leybourne-Newbold small-sample correction; a robustness variant runs the same test directly on the 43,802 hourly loss differentials (`hac_lag` = 48, accounting for both intraday and day-ahead autocorrelation). Both variants agree:
+
+| Comparison | Variant | n | Mean loss diff. (EUR/MWh) | DM statistic | p-value |
+|---|---|---|---|---|---|
+| LightGBM vs. Lasso | daily | 1,827 | -8.83 | -14.98 | < 0.001 |
+| LightGBM vs. Lasso | hourly | 43,802 | -8.83 | -21.14 | < 0.001 |
+| LightGBM vs. ARIMAX | daily | 1,827 | -7.46 | -13.64 | < 0.001 |
+| LightGBM vs. ARIMAX | hourly | 43,802 | -7.47 | -19.69 | < 0.001 |
+
+Negative values mean LightGBM has the lower expected loss (sign convention: `mean_loss_diff = mean(loss_lightgbm - loss_other)`). Both variants reject the null of equal predictive accuracy at any conventional significance level.
+
 ### 5.2 Calibration, before and after
 
 Nominal vs. empirical one-sided coverage per quantile level (source: `results/coverage_summary.csv`; figure: `assets/reliability_diagram.png`):
@@ -226,7 +237,6 @@ Consistent with Finding 10 and with the README's own Future Work section (no div
 - **Regime-adaptive calibration** -- extend the conformal local-scale estimate to react to the regime signals already computed in this project (evening ramp, Dunkelflaute, renewable surplus), directly targeting Findings 1 and 2.
 - **A ramp term in the local-scale (sigma) estimate** -- a narrower fix targeting the specific intraday heteroskedasticity pattern quantified in Finding 3.
 - **LSTM/Transformer comparison** -- deliberately not pursued: the added complexity and reduced interpretability are judged not to be justified by the likely marginal accuracy gain over the current LightGBM quantile model for this use case.
-- **Diebold-Mariano significance test** on the LightGBM point-accuracy edge over the baselines -- time-boxed and optional for this project phase; would add a formal significance statement alongside the already-reported effect size (Section 5.1).
 - **Further risk measures** (drawdown statistics, extreme quantiles beyond q05/q95) -- out of scope for a backtesting-focused deliverable.
 - **A standalone 15-minute-resolution model**, rather than resampling the known post-2025-09-30 resolution change to an hourly grid.
 

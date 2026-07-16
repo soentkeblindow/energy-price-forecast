@@ -25,6 +25,12 @@ All metrics on the common 2021-2025 walk-forward test set (rolling-90-day window
 | **LightGBM** | **15.40** | **26.59** | **0.129** |
 
 - **LightGBM leads by a wide margin:** MAE 15.4 EUR/MWh vs. 22.9-24.2 for ARIMAX/Lasso and 34.8 for the naive benchmark -- roughly 37% lower error than the best alternative model.
+- **That edge is not noise:** a Diebold-Mariano test on daily mean absolute-error loss differentials (Newey-West HAC, Harvey correction) confirms the LightGBM advantage over both benchmarks; an hourly HAC variant yields the same conclusion (see `outputs/results/dm_test.csv`).
+
+| Comparison | Mean loss diff. (EUR/MWh) | DM statistic | p-value | n (days) |
+|---|---|---|---|---|
+| LightGBM vs. Lasso | -8.83 | -14.98 | < 0.001 | 1827 |
+| LightGBM vs. ARIMAX | -7.46 | -13.64 | < 0.001 | 1827 |
 - **Raw quantile intervals massively under-cover:** reporting the raw, uncalibrated q05 as a 5% VaR limit breaches in 18.3% (long) / 17.8% (short) of hours, not 5%. Scaled conformal recalibration fixes this: breach rates drop to 4.9% (long) / 5.2% (short), and the implied capital buffer is 1.53x (long) / 1.76x (short) larger than the uncalibrated one would have reported.
 - **The calibrated risk measure passes the unconditional backtest but fails the conditional one:** Kupiec does not reject at `overall`, yet 35 of 60 conditioning cells (hour-of-day phase, forecast-height bucket, forecast-based regime) break coverage under an honest bootstrap CI -- see the signature figure above.
 
@@ -106,7 +112,6 @@ make report-assets
 ## Future work
 
 - **LSTM/Transformer comparison** -- deliberately out of scope: the marginal accuracy gain over a well-tuned LightGBM quantile model is unlikely to justify the added complexity and interpretability cost for this use case.
-- **Diebold-Mariano significance test** on the LightGBM-vs-baseline MAE edge -- time-boxed and optional for this project phase; would add a formal significance statement alongside the already-reported effect size.
 - **Regime-adaptive calibration** -- the conditional coverage breaks documented above point directly at this as the next methodological step, not attempted here.
 - **A ramp term in the local-scale (sigma) estimate** -- a narrower fix targeting the specific intraday heteroskedasticity pattern behind the evening-ramp coverage breaks.
 - **Further risk measures** (drawdown statistics, extreme quantiles beyond q05/q95) -- out of scope for a backtesting-focused deliverable.

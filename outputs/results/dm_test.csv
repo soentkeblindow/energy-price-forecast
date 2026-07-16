@@ -1,0 +1,5 @@
+comparison,variant,n_obs,hac_lag,horizon,mean_loss_diff_eur_mwh,dm_stat,p_value
+lightgbm_vs_lasso,daily,1827,7,1,-8.833528076081521,-14.97629269226728,0.0
+lightgbm_vs_lasso,hourly,43802,48,24,-8.830837932816868,-21.137105776454934,0.0
+lightgbm_vs_arimax,daily,1827,7,1,-7.456103713550706,-13.639141492066914,0.0
+lightgbm_vs_arimax,hourly,43802,48,24,-7.467544049706822,-19.693833683910373,0.0

@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.32.0",
     "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
     "seaborn>=0.13.2",
     "shap>=0.51.0",
     "statsmodels>=0.14.6",
