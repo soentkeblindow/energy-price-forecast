@@ -45,7 +45,7 @@ The point forecast (LightGBM) outperforms all evaluated benchmarks (Naive, Lasso
 
 ## 4. Methodology
 
-**Walk-forward design.** All backtests use a rolling or expanding, strictly time-ordered evaluation -- never a random train/test split. The production LightGBM configuration uses a rolling 90-day training window with daily refit (`refit_every=1`); ARIMAX uses `refit_every=7` with a 90-day training span. Hyperparameter tuning (Optuna, LightGBM) runs in an inner loop nested inside the walk-forward, never touching test-period data; an empirical comparison across two independent tuning runs found tuned parameters statistically indistinguishable from the untuned defaults, which are used as the de-facto baseline going forward (`../notebooks/03_model_diagnostics.ipynb`).
+**LightGBM in a walk-forward design.** All backtests use a rolling or expanding, strictly time-ordered evaluation -- never a random train/test split. The production LightGBM configuration uses a rolling 90-day training window with daily refit (`refit_every=1`); ARIMAX (Benchmark) uses `refit_every=7` with a 90-day training span. Hyperparameter tuning (Optuna, LightGBM) runs in an inner loop nested inside the walk-forward, never touching test-period data; an empirical comparison across two independent tuning runs found tuned parameters statistically indistinguishable from the untuned defaults, which are used as the de-facto baseline going forward (`../notebooks/03_model_diagnostics.ipynb`).
 
 **Leakage control.** The gate-closure information contract (Section 3) is the structural leakage guard; the walk-forward harness additionally asserts `train_index.max() < test_index.min()` on every fold.
 
@@ -160,47 +160,47 @@ Ten findings, ordered by severity. Each carries a one-sentence statement, the ve
 ### Finding 1 -- Conditional coverage breaks despite unconditional calibration
 **Finding:** The calibrated risk measure is unconditionally well-calibrated but breaks conditional coverage in 35 of 60 (variant, side, subset) cells, concentrated in the evening ramp and the upper forecast-height buckets.
 **Evidence:** 35/60 cells have a bootstrap breach-rate CI excluding the nominal 0.05 (`results/backtest_coverage.csv`, `breach_rate_ci_excludes_alpha`). Mechanism example: `calibrated`/short in the evening ramp breaches at 0.095 against nominal 0.05 (CI [0.084, 0.106]) -- close to double the target rate. Scale check: 60 tests at a 5% level would produce ~3 false rejections under a global null; 35 is more than an order of magnitude above that (the 60 cells are not independent tests -- subsets nest and overlap -- so no formal multiplicity correction is applied, only named). Cross-reference: Finding 10 (regime-adaptive calibration).
-**Classification:** Limitation.
+**Classification: Limitation**.
 
 ### Finding 2 -- Day-level breach clustering survives the conformal correction
 **Finding:** Breaches cluster into multi-day runs rather than scattering independently across days, and the 90-day conformal correction does not remove this.
 **Evidence:** Day-level Christoffersen `LR_ind` = 53-104 across all four validated (variant, side) combinations at `overall` (`results/backtest_coverage.csv`, `chris_ind_lr_day`), all rejecting independence against the chi-square(1) critical value of 3.84 -- `calibrated` included. Interpretation: regime persistence (cold snaps, extended scarcity). The pre-registered counter-expectation (that day-level independence would hold after calibration) was falsified by this result -- noted here as a process-transparency point, per Section 4.
-**Classification:** Limitation.
+**Classification: Limitation**.
 
 ### Finding 3 -- Intraday residual heteroskedasticity is not fully absorbed by either calibration variant
 **Finding:** The standardised-residual scale varies materially across the delivery hour, and both `calibrated` and `fhs` show conditional weaknesses in the ramp hours as a result.
 **Evidence:** `std(r)` of the standardised residuals ranges from 0.867 (04:00 local) to 1.294 (19:00 local) across the 24 delivery hours (computed from `data/processed/book_hourly.parquet`'s `r` column grouped by Europe/Berlin local hour, not checked in, reproducible via `scripts/compute_risk.py`). Consequence: conditional breaks in the ramp hours for both variants (Finding 1); `fhs` additionally shows a statistically significant ES severity shortfall in the evening ramp on the short side (`z1` CI fully above 0: [0.055, 0.207], `results/backtest_coverage.csv`). Cross-reference: Finding 10 (a ramp term in the local-scale estimate).
-**Classification:** Limitation.
+**Classification: Limitation**.
 
 ### Finding 4 -- Basel traffic-light zone boundaries are too tight for this book (overdispersion)
 **Finding:** The binomial Basel zone boundaries assume independent hours; this book's intraday breach clustering violates that assumption, inflating the breach-count variance beyond what the boundaries expect.
 **Evidence:** 33.3% yellow / 8.3% red across 24 qualifying (variant, side, window) combinations for the validated variants, against a nominal ~5% expectation under true independence (`data/processed/backtest_coverage.csv`, `basel_n_yellow`/`basel_n_red`/`basel_n_windows`, not checked in). Classification rationale: the traffic light is retained as an illustrative cross-check only; the statistical verdict is carried by Kupiec and Christoffersen (Section 6), and day-based zone boundaries that would account for the clustering are deliberately deferred (Finding 10) rather than retrofitted here.
-**Classification:** Accepted.
+**Classification: Accepted**.
 
 ### Finding 5 -- Mild ES over-conservatism of the `calibrated` variant in the unconditional aggregate
 **Finding:** At `overall`, the calibrated variant's Expected Shortfall is mildly over-conservative (realised losses on breach days average somewhat below the predicted ES) on both book sides.
 **Evidence:** `z1` 95% CIs fully below 0 on both sides at `overall`: long [-0.136, -0.078], short [-0.084, -0.018] (`results/risk_headline.csv`). Statistically real (CIs exclude 0) but small in magnitude and on the conservative side -- a capital-efficiency cost, not a risk-understatement.
-**Classification:** Accepted.
+**Classification: Accepted**.
 
 ### Finding 6 -- The crisis macro-regime is a structural stress test for every model
 **Finding:** All four compared models (Naive, Lasso, LightGBM, ARIMAX) show materially worse point accuracy in the 2021-09-01 to 2023-04-01 crisis regime than in their own overall test-period average.
 **Evidence:** Crisis-vs-overall MAE ratio: Naive 1.64x, Lasso 1.69x, LightGBM 1.65x, ARIMAX 1.42x (`../notebooks/04_regime_risk.ipynb`, Section 2, table T1). Classification rationale: this is an application-boundary characteristic of the market period, not a model-specific defect (every model, including the simplest benchmark, degrades comparably); reflected in Section 2's stated application boundaries.
-**Classification:** Accepted.
+**Classification: Accepted**.
 
 ### Finding 7 -- Raw quantile intervals massively under-cover; scaled conformal calibration corrects this unconditionally
 **Finding:** Before calibration, using the raw q05/q95 as a nominal 5%/95% risk threshold breached far more often than intended; after calibration, breach rates match the nominal target and the unconditional backtest passes.
 **Evidence:** Before: `raw` breach rate 0.183 (long) / 0.178 (short) against nominal 0.05 (`results/risk_headline.csv`); nested 90% band empirical coverage 0.638 against 0.90 nominal (`data/processed/reliability_bands.csv`, not checked in). Remediation: scaled, one-sided conformal recalibration per quantile level (Section 4). After: breach rates 0.049 (long) / 0.052 (short), Kupiec does not reject at `overall` for either side (`results/risk_headline.csv`). Price of the correction: calibrated bands are 1.67x-2.17x wider than the raw bands, depending on nested-band width (`data/processed/conformal_bands_raw.csv` vs. `conformal_bands_sorted.csv`, not checked in); expressed as a capital-buffer ratio, the implied VaR buffer is 1.53x (long) / 1.76x (short) the size the uncalibrated `raw` threshold would have implied (`buffer_factor` = `mean_var(calibrated) / mean_var(raw)`, `results/risk_headline.csv`). `raw` remains visible throughout the backtest as the counterfactual it is, never presented as a validated risk number.
-**Classification:** Remediated.
+**Classification: Remediated**.
 
 ### Finding 8 -- Quantile crossing in the calibrated grid
 **Finding:** The per-quantile conformal correction, applied independently at each level, produced a material rate of ordering violations between adjacent quantile levels; a monotone rearrangement step removes this by construction.
 **Evidence:** Before: 31.6% of (day, level) rows show at least one adjacent-level crossing, mean over `data/processed/conformal_diagnostics.csv`'s `crossing_rate` column (not checked in). Remediation: isotonic rearrangement per timestamp (`../src/energy_price_forecast/evaluation/rearrangement.py`). After: 0% by construction (not re-measured empirically -- the isotonic projection guarantees monotonicity exactly; `../notebooks/04_regime_risk.ipynb`, Section 3, table T3), coverage-neutral (per-level empirical coverage unaffected, since the sort is isotonic). The diagnostic crossing rate continues to be reported on the unsorted grid deliberately -- a real signal about `Q_alpha` noise across levels, not a cosmetic defect to be hidden by the fix.
-**Classification:** Remediated.
+**Classification: Remediated**.
 
 ### Finding 9 -- Kupiec on the raw hourly series is anti-conservative relative to the honest bootstrap
 **Finding:** Testing coverage on the uncorrected hourly breach series over-rejects relative to a test that accounts for intraday and day-to-day dependence; the bootstrap-based verdict is the one this project reports as authoritative.
 **Evidence:** Kupiec rejects 43 of 60 validated cells (`kupiec_pvalue < 0.05`); the month-stratified day-block bootstrap CI rejects 35 of the same 60 (`breach_rate_ci_excludes_alpha`) -- a strict subset (0 cells rejected by the bootstrap but not by Kupiec). The 8 cells Kupiec rejects that the bootstrap does not: `calibrated`/long/`bucket_50_100`, `calibrated`/long/`forecast_renewable_surplus`, `calibrated`/short/`bucket_50_100`, `calibrated`/short/`bucket_150_250`, `calibrated`/short/`bucket_250_400`, `fhs`/long/`bucket_400_plus`, `fhs`/long/`forecast_renewable_surplus`, `fhs`/short/`bucket_150_250` (`results/backtest_coverage.csv`, cross-tabulated). Remediation: the bootstrap CI is established as the reported verdict; Kupiec continues to be shown alongside it, not in place of it, with the gap explicitly quantified rather than silently resolved in favour of the more convenient test.
-**Classification:** Remediated.
+**Classification: Remediated**.
 
 ### Finding 10 -- Deliberately open points
 **Finding:** A defined set of methodological extensions is scoped out of this project phase, each for a stated reason, not by omission.
@@ -211,7 +211,7 @@ Ten findings, ordered by severity. Each carries a one-sentence statement, the ve
 - **Diebold-Mariano significance test** on the LightGBM-vs-baseline MAE edge -- a formal significance statement alongside the already-reported effect size; time-boxed and deferred.
 - **Drawdown statistics and extreme quantiles beyond q05/q95** -- out of scope for a backtesting-focused deliverable.
 - **A standalone 15-minute-resolution model** -- the 2025-09-30 resolution break (Section 3) is currently absorbed by resampling, not modelled directly.
-**Classification:** Future Work.
+**Classification: Future Work**.
 
 ### Scope note on ARIMAX
 
