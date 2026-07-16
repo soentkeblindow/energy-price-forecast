@@ -17,9 +17,11 @@ from energy_price_forecast.reporting.assets import (
 )
 from energy_price_forecast.reporting.snapshot import SNAPSHOT_COLUMNS, build_snapshot
 from energy_price_forecast.reporting.tables import (
+    assert_model_comparison_reconciles,
     backtest_coverage_export,
     coverage_summary,
     model_comparison,
+    model_comparison_by_regime,
     risk_headline,
 )
 
@@ -182,6 +184,62 @@ def test_model_comparison_appends_unknown_models_after_known_order() -> None:
     }
     table = model_comparison(predictions)
     assert list(table["model"]) == ["LightGBM", "Mystery"]
+
+
+# ---------------------------------------------------------------------------
+# model_comparison_by_regime / assert_model_comparison_reconciles (Sprint 5.3.1)
+# ---------------------------------------------------------------------------
+
+
+def _mixed_regime_flags(idx: pd.DatetimeIndex) -> pd.DataFrame:
+    n = len(idx)
+    half = n // 2
+    data: dict[str, object] = {col: [False] * n for col in REGIME_FLAG_COLUMNS}
+    data["renewable_scarcity"] = [True] * half + [False] * (n - half)
+    data["normal"] = [False] * half + [True] * (n - half)
+    data[MACRO_REGIME_COLUMN] = pd.Categorical(["crisis"] * half + ["calm"] * (n - half))
+    return pd.DataFrame(data, index=idx)
+
+
+def test_model_comparison_by_regime_reconciles_and_computes_regimes() -> None:
+    idx = _hourly_utc("2021-01-01", 4)
+    predictions = {
+        "Naive": _pred_frame([10.0, 20.0, 50.0, 52.0], [12.0, 24.0, 50.0, 52.0]),
+        "LightGBM": _pred_frame([10.0, 20.0, 50.0, 52.0], [10.0, 20.0, 50.0, 52.0]),
+    }
+    flags = _mixed_regime_flags(idx)
+
+    comparison = model_comparison(predictions)
+    by_regime = model_comparison_by_regime(predictions, flags)
+
+    assert set(by_regime.columns) == {"model", "regime", "axis", "n", "mae", "rmse", "wape"}
+    assert_model_comparison_reconciles(comparison, by_regime)  # must not raise
+
+    naive = by_regime[by_regime["model"] == "Naive"].set_index("regime")
+    assert naive.loc["overall", "n"] == 4
+    assert naive.loc["overall", "mae"] == pytest.approx(1.5)
+    assert naive.loc["renewable_scarcity", "n"] == 2
+    assert naive.loc["renewable_scarcity", "mae"] == pytest.approx(3.0)
+    assert naive.loc["renewable_scarcity", "axis"] == "flag"
+    assert naive.loc["normal", "mae"] == pytest.approx(0.0)
+    assert naive.loc["crisis", "mae"] == pytest.approx(3.0)
+    assert naive.loc["crisis", "axis"] == "macro"
+    assert naive.loc["calm", "mae"] == pytest.approx(0.0)
+    assert naive.loc["post_crisis", "n"] == 0
+    assert pd.isna(naive.loc["post_crisis", "mae"])
+
+
+def test_assert_model_comparison_reconciles_raises_on_mismatch() -> None:
+    idx = _hourly_utc("2021-01-01", 4)
+    predictions = {"Naive": _pred_frame([10.0, 20.0, 50.0, 52.0], [12.0, 24.0, 50.0, 52.0])}
+    flags = _mixed_regime_flags(idx)
+    comparison = model_comparison(predictions)
+    by_regime = model_comparison_by_regime(predictions, flags)
+    tampered = by_regime.copy()
+    tampered.loc[tampered["regime"] == "overall", "mae"] = 999.0
+
+    with pytest.raises(ValueError, match="Naive"):
+        assert_model_comparison_reconciles(comparison, tampered)
 
 
 # ---------------------------------------------------------------------------

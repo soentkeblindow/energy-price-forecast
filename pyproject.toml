@@ -24,9 +24,11 @@ dependencies = [
     "seaborn>=0.13.2",
     "shap>=0.51.0",
     "statsmodels>=0.14.6",
-    "streamlit>=1.56.0",
     "yfinance>=1.3.0",
 ]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.56.0", "plotly>=6.0.0"]
 
 [project.scripts]
 energy-price-forecast = "energy_price_forecast:main"
@@ -103,6 +105,7 @@ module = [
     "holidays.*",
     "optuna.*",
     "scipy.*",
+    "plotly.*",
 ]
 ignore_missing_imports = true
 

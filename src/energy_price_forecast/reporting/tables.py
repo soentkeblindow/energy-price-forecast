@@ -10,9 +10,18 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..evaluation.breakdown import breakdown_point
 from ..evaluation.metrics import summarise
 
 MODEL_COMPARISON_ORDER: tuple[str, ...] = ("Naive", "Lasso", "LightGBM", "ARIMAX")
+
+MODEL_COMPARISON_FILENAME = "model_comparison.csv"
+COVERAGE_SUMMARY_FILENAME = "coverage_summary.csv"
+BACKTEST_COVERAGE_FILENAME = "backtest_coverage.csv"
+RISK_HEADLINE_FILENAME = "risk_headline.csv"
+MODEL_COMPARISON_BY_REGIME_FILENAME = "model_comparison_by_regime.csv"
+
+_BY_REGIME_COLUMNS = ("model", "regime", "axis", "n", "mae", "rmse", "wape")
 
 
 def model_comparison(predictions: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -38,6 +47,58 @@ def model_comparison(predictions: dict[str, pd.DataFrame]) -> pd.DataFrame:
     order = {name: i for i, name in enumerate(MODEL_COMPARISON_ORDER)}
     table["_order"] = table["model"].map(lambda m: order.get(m, len(order)))
     return table.sort_values("_order").drop(columns="_order").reset_index(drop=True)
+
+
+def model_comparison_by_regime(
+    predictions: dict[str, pd.DataFrame], flags: pd.DataFrame
+) -> pd.DataFrame:
+    """Long-format, per-regime point-metric comparison across all models (Sprint 5.3.1).
+
+    `predictions` must map the SAME display model names to the SAME tidy
+    frames passed to `model_comparison` -- each model's `overall` row here is
+    then guaranteed to reconcile exactly with `model_comparison`'s row for
+    that model (see `assert_model_comparison_reconciles`). `flags` must be
+    `tag_regimes` on the FULL interim history (unreindexed): `breakdown_point`
+    requires every prediction index to be a subset of `flags.index`.
+
+    Returns one row per (model, regime): `model`, `regime`, `axis`
+    (overall/macro/flag, from `breakdown_point`), `n`, `mae`, `rmse`, `wape`.
+    Rows are grouped by `MODEL_COMPARISON_ORDER`; within a model, regime rows
+    keep `breakdown_point`'s order (overall, then macro, then flag regimes).
+    """
+    order = {name: i for i, name in enumerate(MODEL_COMPARISON_ORDER)}
+    frames = []
+    for name, preds in predictions.items():
+        table = breakdown_point(preds, flags).reset_index(names="regime")
+        table.insert(0, "model", name)
+        table["mae"] = table["mae"].round(2)
+        table["rmse"] = table["rmse"].round(2)
+        table["wape"] = table["wape"].round(4)
+        frames.append(table[list(_BY_REGIME_COLUMNS)])
+    result = pd.concat(frames, ignore_index=True)
+    result["_order"] = result["model"].map(lambda m: order.get(m, len(order)))
+    return result.sort_values("_order", kind="stable").drop(columns="_order").reset_index(drop=True)
+
+
+def assert_model_comparison_reconciles(comparison: pd.DataFrame, by_regime: pd.DataFrame) -> None:
+    """Fail-fast check: each model's `overall` row in `by_regime` must equal its
+    row in `comparison` (`model_comparison.csv`) exactly. A mismatch points at
+    inconsistent source frames between the two exports, not a normal edge case.
+    """
+    overall = by_regime[by_regime["regime"] == "overall"].set_index("model")
+    for _, row in comparison.iterrows():
+        model = row["model"]
+        expected = (row["mae"], row["rmse"], row["wape"])
+        actual = (
+            overall.loc[model, "mae"],
+            overall.loc[model, "rmse"],
+            overall.loc[model, "wape"],
+        )
+        if expected != actual:
+            raise ValueError(
+                f"model_comparison_by_regime 'overall' row for {model!r} does not "
+                f"reconcile with model_comparison.csv: expected {expected}, got {actual}."
+            )
 
 
 def coverage_summary(

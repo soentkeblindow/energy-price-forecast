@@ -194,14 +194,28 @@ def main() -> None:
     )
     risk_summary = _load_csv(inputs["risk_summary"], ("variant", "side", "mean_var"))
 
+    # tag_regimes needs the FULL interim history (the price-spike threshold is a
+    # per-macro-regime quantile over the whole frame). `full_regime_flags` (unreindexed)
+    # feeds `breakdown_point` below (Sprint 5.3.1); the snapshot join further down needs
+    # it restricted to the prediction period instead -- interim spans the pre-test
+    # training history too, which would otherwise look like a large, spurious index
+    # mismatch to build_snapshot (known gotcha from Sprint 4.5).
+    interim = load_interim_hourly(args.interim_path)
+    full_regime_flags = tag_regimes(interim)
+
     # --- Tables ---------------------------------------------------------------
-    model_comparison_table = tables.model_comparison(
-        {
-            "Naive": naive,
-            "Lasso": lasso,
-            "LightGBM": lgbm_q50,
-            "ARIMAX": arimax_q50,
-        }
+    predictions_by_model = {
+        "Naive": naive,
+        "Lasso": lasso,
+        "LightGBM": lgbm_q50,
+        "ARIMAX": arimax_q50,
+    }
+    model_comparison_table = tables.model_comparison(predictions_by_model)
+    model_comparison_by_regime_table = tables.model_comparison_by_regime(
+        predictions_by_model, full_regime_flags
+    )
+    tables.assert_model_comparison_reconciles(
+        model_comparison_table, model_comparison_by_regime_table
     )
     coverage_summary_table = tables.coverage_summary(
         conformal_raw, conformal_sorted, reliability_curve_df
@@ -212,25 +226,24 @@ def main() -> None:
     # lineterminator="\n": Windows' pandas default writes "\r\n", which the repo's
     # mixed-line-ending pre-commit hook (--fix=lf) would otherwise rewrite every run.
     model_comparison_table.to_csv(
-        results_dir / "model_comparison.csv", index=False, lineterminator="\n"
+        results_dir / tables.MODEL_COMPARISON_FILENAME, index=False, lineterminator="\n"
+    )
+    model_comparison_by_regime_table.to_csv(
+        results_dir / tables.MODEL_COMPARISON_BY_REGIME_FILENAME, index=False, lineterminator="\n"
     )
     coverage_summary_table.to_csv(
-        results_dir / "coverage_summary.csv", index=False, lineterminator="\n"
+        results_dir / tables.COVERAGE_SUMMARY_FILENAME, index=False, lineterminator="\n"
     )
     backtest_coverage_table.to_csv(
-        results_dir / "backtest_coverage.csv", index=False, lineterminator="\n"
+        results_dir / tables.BACKTEST_COVERAGE_FILENAME, index=False, lineterminator="\n"
     )
-    risk_headline_table.to_csv(results_dir / "risk_headline.csv", index=False, lineterminator="\n")
-    log.info("written 4 CSVs to %s", results_dir)
+    risk_headline_table.to_csv(
+        results_dir / tables.RISK_HEADLINE_FILENAME, index=False, lineterminator="\n"
+    )
+    log.info("written 5 CSVs to %s", results_dir)
 
     # --- Snapshot ---------------------------------------------------------------
-    # tag_regimes needs the FULL interim history (the price-spike threshold is a
-    # per-macro-regime quantile over the whole frame), but its output must be
-    # restricted to the prediction period before joining -- interim spans the
-    # pre-test training history too, which would otherwise look like a large,
-    # spurious index mismatch to build_snapshot (known gotcha from Sprint 4.5).
-    interim = load_interim_hourly(args.interim_path)
-    regime_flags = tag_regimes(interim).reindex(lgbm_q50.index)
+    regime_flags = full_regime_flags.reindex(lgbm_q50.index)
 
     snapshot_frame, stats = snapshot.build_snapshot(
         price_actual=lgbm_q50["y_true"],
