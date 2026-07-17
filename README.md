@@ -2,7 +2,11 @@
 
 Probabilistic forecasts with conformal calibration, ES/VaR backtesting, and regime-conditional validation.
 
-<!-- badges: added in 5.4 -->
+[![CI](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/soentkeblindow/energy-price-forecast/actions/workflows/ci.yml)
+[![Ruff](https://img.shields.io/badge/lint-ruff-261230?logo=ruff)](https://github.com/astral-sh/ruff)
+[![Typed with mypy](https://img.shields.io/badge/typed-mypy-1f5082?logo=python)](https://mypy-lang.org/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Probabilistic day-ahead price forecasting for the German-Luxembourg bidding zone (ENTSO-E data), comparing regularised linear baselines, LightGBM quantile regression, and ARIMAX under a strictly leakage-free walk-forward evaluation at gate-closure information (~12:00 D-1). The forecast intervals are then conformal-calibrated, and the resulting trading-book Value-at-Risk / Expected Shortfall of a hypothetical 10 MW book is **backtested in its own right** -- the same lens an independent model-validation unit would apply, not just a point-accuracy comparison.
 
@@ -124,7 +128,9 @@ make report-assets
 - [`03_model_diagnostics.ipynb`](notebooks/03_model_diagnostics.ipynb) -- LightGBM/ARIMAX point comparison, SHAP attribution, feature ablation.
 - [`04_regime_risk.ipynb`](notebooks/04_regime_risk.ipynb) -- conformal calibration, trading-book VaR/ES, full backtest validation (source of this README's headline figures/numbers).
 - [`model_validation_report.md`](outputs/model_validation_report.md) -- independent-validation-style review with a numbered findings catalogue (Limitation / Accepted / Remediated / Future Work).
-- <!-- dashboard: live link added in 5.4 -->
+- **Live demo:** <!-- LIVE_DEMO_URL --> -- interactive Streamlit Backtest Explorer (Forecast vs. Actual, Regime breakdown, Calibration & Risk views), read-only against the checked-in results snapshot.
+
+  ![Backtest Explorer demo](outputs/assets/dashboard_demo.gif)
 
 ## License
 

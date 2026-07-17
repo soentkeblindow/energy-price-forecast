@@ -1,10 +1,41 @@
-.PHONY: report-assets dashboard dm-test
+.PHONY: help data backtest test lint dashboard report-assets dm-test requirements
 
-report-assets:
-	uv run python scripts/export_report_assets.py
+.DEFAULT_GOAL := help
+
+help:
+	@echo "Available targets:"
+	@echo "  data           Build interim + feature parquet from raw data (needs data/raw/ and an ENTSO-E API key in .env -- see README 'Getting started')"
+	@echo "  backtest       Run the flagship LightGBM walk-forward backtest (needs data/processed/features.parquet from 'make data'; no API key needed directly)"
+	@echo "  test           Run the test suite (pytest)"
+	@echo "  lint           Run ruff check, ruff format --check, and mypy (mirrors CI)"
+	@echo "  dashboard      Launch the Streamlit Backtest Explorer locally"
+	@echo "  report-assets  Regenerate README figures/tables from outputs/results/ (no API key needed)"
+	@echo "  dm-test        Run the Diebold-Mariano significance test (no API key needed)"
+	@echo "  requirements   Regenerate requirements.txt for Streamlit Community Cloud deployment"
+
+data:
+	uv run python scripts/build_interim.py
+	uv run python scripts/build_features.py
+
+backtest:
+	uv run python scripts/backtest.py --model lgbm
+
+test:
+	uv run pytest
+
+lint:
+	uv run ruff check .
+	uv run ruff format --check .
+	uv run mypy src
 
 dashboard:
 	uv run --extra dashboard streamlit run src/energy_price_forecast/dashboard/app.py
 
+report-assets:
+	uv run python scripts/export_report_assets.py
+
 dm-test:
 	uv run python scripts/run_dm_test.py
+
+requirements:
+	uv export --format requirements.txt --extra dashboard --no-dev --no-hashes -o requirements.txt
