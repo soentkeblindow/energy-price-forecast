@@ -128,7 +128,7 @@ make report-assets
 - [`03_model_diagnostics.ipynb`](notebooks/03_model_diagnostics.ipynb) -- LightGBM/ARIMAX point comparison, SHAP attribution, feature ablation.
 - [`04_regime_risk.ipynb`](notebooks/04_regime_risk.ipynb) -- conformal calibration, trading-book VaR/ES, full backtest validation (source of this README's headline figures/numbers).
 - [`model_validation_report.md`](outputs/model_validation_report.md) -- independent-validation-style review with a numbered findings catalogue (Limitation / Accepted / Remediated / Future Work).
-- **Live demo:** <!-- LIVE_DEMO_URL --> -- interactive Streamlit Backtest Explorer (Forecast vs. Actual, Regime breakdown, Calibration & Risk views), read-only against the checked-in results snapshot.
+- **[Live demo](https://energy-price-forecast-azetvtdc9hgc7yylhqp84q.streamlit.app/)** -- interactive Streamlit Backtest Explorer (Forecast vs. Actual, Regime breakdown, Calibration & Risk views), read-only against the checked-in results snapshot.
 
   ![Backtest Explorer demo](outputs/assets/dashboard_demo.gif)
 
