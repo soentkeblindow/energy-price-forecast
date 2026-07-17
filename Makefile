@@ -38,4 +38,4 @@ dm-test:
 	uv run python scripts/run_dm_test.py
 
 requirements:
-	uv export --format requirements.txt --extra dashboard --no-dev --no-hashes -o requirements.txt
+	uv export --format requirements.txt --extra dashboard --no-dev --no-hashes -o src/energy_price_forecast/dashboard/requirements.txt
