@@ -83,18 +83,20 @@ def _render_forecast_tab(snapshot: pd.DataFrame) -> None:
     default_start = max(pd.Timestamp(DEFAULT_WINDOW_START, tz="UTC"), idx_min).date()
     default_end = min(pd.Timestamp(DEFAULT_WINDOW_END, tz="UTC"), idx_max).date()
 
-    date_range = st.date_input(
-        "Date range",
-        value=(default_start, default_end),
-        min_value=idx_min.date(),
-        max_value=idx_max.date(),
+    # Two single-value pickers instead of one range-tuple `st.date_input`: the
+    # range-tuple variant ships a "quick select" dropdown (Past week/month/...)
+    # that ignores min_value/max_value and can raise a spurious end-date
+    # validation error (streamlit/streamlit#12293, #11939 -- unresolved upstream).
+    date_col1, date_col2 = st.columns(2)
+    start = date_col1.date_input(
+        "Start date", value=default_start, min_value=idx_min.date(), max_value=idx_max.date()
     )
+    end = date_col2.date_input(
+        "End date", value=default_end, min_value=idx_min.date(), max_value=idx_max.date()
+    )
+    if start > end:
+        start, end = end, start
     show_raw = st.toggle("Show raw interval", value=False)
-
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start, end = date_range
-    else:
-        start, end = default_start, default_end
 
     start_ts = pd.Timestamp(start, tz="UTC")
     end_ts = pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
@@ -111,8 +113,8 @@ def _render_forecast_tab(snapshot: pd.DataFrame) -> None:
     )
     raw_rate = interval_breach_rate(window["price_actual"], window["lo_raw"], window["hi_raw"])
     col1, col2 = st.columns(2)
-    col1.metric("Calibrated breach rate", f"{calibrated_rate:.2%}")
-    col2.metric("Raw breach rate", f"{raw_rate:.2%}")
+    col1.metric("Calibrated breach rate (selected date range)", f"{calibrated_rate:.2%}")
+    col2.metric("Raw breach rate (selected date range)", f"{raw_rate:.2%}")
 
 
 def _render_regime_tab(snapshot: pd.DataFrame, model_comparison_by_regime: pd.DataFrame) -> None:
