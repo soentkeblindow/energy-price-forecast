@@ -36,8 +36,9 @@ LOW_SUPPORT_LABEL = "open marker = low support; the CI is illustrative, not infe
 
 
 def plot_coverage_forest(coverage: pd.DataFrame, *, alpha: float) -> Figure:
-    """The signature figure. Forest plot of breach_rate with bootstrap CI, one row
-    per (variant, side, subset), vertical reference line at `alpha`.
+    """The signature figure of the model validation (Notebook 04 / model_validation_report.md).
+    Forest plot of breach_rate with bootstrap CI, one row per (variant, side, subset),
+    vertical reference line at `alpha`.
 
     Rows whose CI excludes alpha are highlighted. `low_support` rows get an OPEN
     marker and a DASHED CI bar -- never dropped. `raw` rows are drawn greyed
