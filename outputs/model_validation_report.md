@@ -74,7 +74,7 @@ Common 2021-2025 walk-forward test period, pooled MAE/RMSE/WAPE (source: `result
 | ARIMAX | 22.87 | 35.74 | 0.191 |
 | **LightGBM** | **15.40** | **26.59** | **0.129** |
 
-LightGBM leads every benchmark by a wide margin: roughly 33-37% lower MAE than the next-best alternative (Lasso, ARIMAX) and 56% lower than the naive benchmark.
+LightGBM leads every benchmark by a wide margin: roughly 33-36% lower MAE than the next-best alternative (ARIMAX, Lasso) and 56% lower than the naive benchmark.
 
 **Significance of the edge (source: `results/dm_test.csv`):** a Diebold-Mariano test on the LightGBM-vs-baseline MAE loss differentials confirms the edge is not sampling noise. The primary variant aggregates losses to daily means (`n` = 1,827 days), since all 24 hours of a delivery day share the same gate-closure information set, so daily means are the natural unit of an independent observation, with a Newey-West HAC variance estimate (`hac_lag` = 7) and the Harvey-Leybourne-Newbold small-sample correction; a robustness variant runs the same test directly on the 43,802 hourly loss differentials (`hac_lag` = 48, accounting for both intraday and day-ahead autocorrelation). Both variants agree:
 

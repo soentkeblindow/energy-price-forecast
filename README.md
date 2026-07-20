@@ -26,7 +26,7 @@ All metrics on the common 2021-2025 walk-forward test set (rolling-90-day window
 | ARIMAX | 22.87 | 35.74 | 0.191 |
 | **LightGBM** | **15.40** | **26.59** | **0.129** |
 
-- **LightGBM leads by a wide margin:** MAE 15.4 EUR/MWh vs. 22.9-24.2 for ARIMAX/Lasso and 34.8 for the naive benchmark. That amounts to roughly 37% lower error than the best alternative model.
+- **LightGBM leads by a wide margin:** MAE 15.4 EUR/MWh vs. 22.9-24.2 for ARIMAX/Lasso and 34.8 for the naive benchmark. That amounts to roughly 33% lower error than the best alternative model.
 - **That edge is not noise:** a Diebold-Mariano test on daily mean absolute-error loss differentials (Newey-West HAC, Harvey correction) confirms the LightGBM advantage over both benchmarks; an hourly HAC variant yields the same conclusion (see `outputs/results/dm_test.csv`).
 
 | Comparison | Mean loss diff. (EUR/MWh) | DM statistic | p-value | n (days) |
